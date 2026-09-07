@@ -1,0 +1,10 @@
+002893P**PITAHAYA ROJA X KG**0000750000                       2 1 1            
+001096PBOLOGNA DE POLLO 2,5KG0000483000                       2 1 1            
+000714PG.C. SOLOMO DE CUERITO0000881060                       2 1 1            
+009473P**REMOLACHA X KG**    0000080001                       2 1 1            
+002937PDALVI QUESO PARMESANO 0003062365                       2 1 1            
+000001PSIN PRECIO            0000000000                       2 1 1            
+00XXXXPCODIGO INVALIDO       0000100000                       2 1 1            
+000002P                      0000500000                       2 1 1            
+000003PLINEA CORTA
+000714PG.C. SOLOMO REPETIDO  0000999060                       2 1 1            

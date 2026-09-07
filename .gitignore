@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Datos de la instalacion, nunca del repositorio
+config.json
+logs/
+*.log
+rtslabelscale.dll
+RLS1000/
+cadtxt.txt

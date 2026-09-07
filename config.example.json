@@ -1,0 +1,88 @@
+{
+  "version": 2,
+  "origen": {
+    "tipo": "txt_ancho_fijo",
+    "ruta": "X:\\cadtxt.txt",
+    "encoding": "latin-1",
+    "layout": {
+      "codigo": [0, 6],
+      "tipo": [6, 7],
+      "nombre": [7, 29],
+      "precio": [29, 36],
+      "vida_util_dias": [36, 39],
+      "departamento": []
+    },
+    "csv_delimitador": ";",
+    "csv_tiene_cabecera": true,
+    "csv_columnas": {},
+    "solo_marca_tipo": "",
+    "precio_minimo": 1,
+    "nombre_ancho_max": 22,
+    "quitar_acentos": false,
+    "precio_decimales": 2
+  },
+  "balanzas": [
+    { "id": 1, "ip": "10.46.18.50", "nombre": "Balanza 1", "activa": true, "conn_id": "1", "puerto": 4000 },
+    { "id": 2, "ip": "10.46.18.51", "nombre": "Balanza 2", "activa": true, "conn_id": "2", "puerto": 4000 },
+    { "id": 3, "ip": "10.46.18.53", "nombre": "Balanza 3", "activa": true, "conn_id": "3", "puerto": 4000 },
+    { "id": 4, "ip": "10.46.18.52", "nombre": "Balanza 4", "activa": true, "conn_id": "4", "puerto": 4000 },
+    { "id": 5, "ip": "10.46.18.55", "nombre": "Balanza 5", "activa": true, "conn_id": "5", "puerto": 4000 },
+    { "id": 6, "ip": "10.46.18.54", "nombre": "Balanza 6", "activa": true, "conn_id": "6", "puerto": 4000 },
+    { "id": 7, "ip": "", "nombre": "Balanza 7", "activa": false, "conn_id": "7", "puerto": 4000 },
+    { "id": 8, "ip": "", "nombre": "Balanza 8", "activa": false, "conn_id": "8", "puerto": 4000 }
+  ],
+  "rongta": {
+    "dll_path": "C:\\ibalance\\rtslabelscale.dll",
+    "directorios_dependencias": ["C:\\ibalance", "C:\\ibalance\\RLS1000"],
+    "convencion_llamada": "stdcall",
+    "baudrate": 0,
+    "codigo_exito": 0,
+    "tamano_lote_plu": 200,
+    "limpiar_antes_de_enviar": false,
+    "enviar_hotkeys": true,
+    "hotkeys": {
+      "habilitado": true,
+      "teclas_por_pagina": 28,
+      "paginas": 3,
+      "codigos": []
+    },
+    "ini_path": "",
+    "formato_legacy": false,
+    "plu_defaults": {
+      "Deptment": 0,
+      "LabelId": 0,
+      "Tare": 0,
+      "Tolerance": 0,
+      "Rebate": 0,
+      "Message1": 0,
+      "Message2": 0,
+      "PackageType": 0,
+      "PackageWeight": 0,
+      "QtyUnit": 0,
+      "WeightUnit": 0
+    }
+  },
+  "sincronizacion": {
+    "intervalo_minutos": 60,
+    "verificar_ping": true,
+    "timeout_ping_seg": 2,
+    "verificar_puerto": false,
+    "timeout_conexion_seg": 15,
+    "reintentos": 2,
+    "espera_reintento_seg": 5.0,
+    "balanzas_en_paralelo": 1,
+    "pausa_tras_desconectar_seg": 1.0,
+    "pausa_entre_lotes_seg": 0.0,
+    "omitir_si_sin_cambios": false,
+    "cerrar_procesos_legacy": false,
+    "procesos_legacy": ["ibalance.exe"]
+  },
+  "registro": {
+    "directorio": "logs",
+    "nivel": "INFO",
+    "max_bytes": 2000000,
+    "copias": 5,
+    "guardar_reportes": true,
+    "guardar_payloads": false
+  }
+}
