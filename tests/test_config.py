@@ -76,4 +76,10 @@ def test_rutas_relativas_se_resuelven_junto_al_config(tmp_path: Path) -> None:
     cfg = config_por_defecto(1)
     cfg.guardar(tmp_path / "config.json")
     assert cfg.resolver("logs") == tmp_path / "logs"
-    assert cfg.resolver("/tmp/abs") == Path("/tmp/abs")
+
+    # La ruta absoluta se construye a partir de tmp_path en vez de escribirla a
+    # mano: en Windows "/tmp/abs" no es absoluta (le falta la unidad) y se
+    # resolveria como relativa, que es justo lo contrario de lo que se prueba.
+    absoluta = tmp_path / "fuera" / "cadtxt.txt"
+    assert absoluta.is_absolute()
+    assert cfg.resolver(str(absoluta)) == absoluta

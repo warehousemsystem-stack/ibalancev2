@@ -6,6 +6,7 @@ consola donde leer el error.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -115,10 +116,12 @@ def test_el_punto_de_entrada_de_pyinstaller_usa_imports_absolutos() -> None:
 
 def test_el_punto_de_entrada_arranca_de_verdad() -> None:
     """Se ejecuta como script suelto, igual que hara PyInstaller."""
+    # Se hereda el entorno y solo se anade PYTHONPATH: en Windows un PATH
+    # recortado deja a python.exe sin sus DLL del sistema.
+    entorno = dict(os.environ, PYTHONPATH=str(RAIZ / "src"))
     resultado = subprocess.run(
         [sys.executable, str(RAIZ / "tools" / "entrada.py"), "--version"],
-        capture_output=True, text=True, timeout=60,
-        env={"PYTHONPATH": str(RAIZ / "src"), "PATH": "/usr/bin:/bin"},
+        capture_output=True, text=True, timeout=60, env=entorno,
     )
     assert resultado.returncode == 0, resultado.stderr
     assert "ibalance" in resultado.stdout
