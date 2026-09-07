@@ -7,7 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from ibalance.config import Config, ConfigError, config_por_defecto, migrar
+from ibalance.config import (
+    PUERTO_RLS1000,
+    Config,
+    ConfigError,
+    config_por_defecto,
+    migrar,
+)
 
 
 def test_ida_y_vuelta(tmp_path: Path) -> None:
@@ -83,3 +89,26 @@ def test_rutas_relativas_se_resuelven_junto_al_config(tmp_path: Path) -> None:
     absoluta = tmp_path / "fuera" / "cadtxt.txt"
     assert absoluta.is_absolute()
     assert cfg.resolver(str(absoluta)) == absoluta
+
+
+def test_el_puerto_por_defecto_es_el_de_las_rls1000() -> None:
+    """5001 sale del propio codigo de la DLL (push 0x1389 en rtscaleConnect)."""
+    assert PUERTO_RLS1000 == 5001
+    assert config_por_defecto(1).balanzas[0].puerto == 5001
+
+
+def test_migra_el_puerto_equivocado_de_la_version_2() -> None:
+    """El 4000 nunca funciono: fue un valor erroneo del esquema anterior."""
+    viejo = {
+        "version": 2,
+        "balanzas": [{"id": 1, "ip": "10.0.0.1", "activa": True, "puerto": 4000}],
+    }
+    assert Config.from_dict(viejo).balanzas[0].puerto == 5001
+
+
+def test_no_pisa_un_puerto_elegido_a_proposito() -> None:
+    viejo = {
+        "version": 2,
+        "balanzas": [{"id": 1, "ip": "10.0.0.1", "activa": True, "puerto": 9100}],
+    }
+    assert Config.from_dict(viejo).balanzas[0].puerto == 9100

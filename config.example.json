@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "origen": {
     "tipo": "txt_ancho_fijo",
     "ruta": "X:\\cadtxt.txt",
@@ -22,14 +22,14 @@
     "precio_decimales": 2
   },
   "balanzas": [
-    { "id": 1, "ip": "10.46.18.50", "nombre": "Balanza 1", "activa": true, "conn_id": "1", "puerto": 4000 },
-    { "id": 2, "ip": "10.46.18.51", "nombre": "Balanza 2", "activa": true, "conn_id": "2", "puerto": 4000 },
-    { "id": 3, "ip": "10.46.18.53", "nombre": "Balanza 3", "activa": true, "conn_id": "3", "puerto": 4000 },
-    { "id": 4, "ip": "10.46.18.52", "nombre": "Balanza 4", "activa": true, "conn_id": "4", "puerto": 4000 },
-    { "id": 5, "ip": "10.46.18.55", "nombre": "Balanza 5", "activa": true, "conn_id": "5", "puerto": 4000 },
-    { "id": 6, "ip": "10.46.18.54", "nombre": "Balanza 6", "activa": true, "conn_id": "6", "puerto": 4000 },
-    { "id": 7, "ip": "", "nombre": "Balanza 7", "activa": false, "conn_id": "7", "puerto": 4000 },
-    { "id": 8, "ip": "", "nombre": "Balanza 8", "activa": false, "conn_id": "8", "puerto": 4000 }
+    { "id": 1, "ip": "10.46.18.50", "nombre": "Balanza 1", "activa": true, "conn_id": "1", "puerto": 5001 },
+    { "id": 2, "ip": "10.46.18.51", "nombre": "Balanza 2", "activa": true, "conn_id": "2", "puerto": 5001 },
+    { "id": 3, "ip": "10.46.18.53", "nombre": "Balanza 3", "activa": true, "conn_id": "3", "puerto": 5001 },
+    { "id": 4, "ip": "10.46.18.52", "nombre": "Balanza 4", "activa": true, "conn_id": "4", "puerto": 5001 },
+    { "id": 5, "ip": "10.46.18.55", "nombre": "Balanza 5", "activa": true, "conn_id": "5", "puerto": 5001 },
+    { "id": 6, "ip": "10.46.18.54", "nombre": "Balanza 6", "activa": true, "conn_id": "6", "puerto": 5001 },
+    { "id": 7, "ip": "", "nombre": "Balanza 7", "activa": false, "conn_id": "7", "puerto": 5001 },
+    { "id": 8, "ip": "", "nombre": "Balanza 8", "activa": false, "conn_id": "8", "puerto": 5001 }
   ],
   "rongta": {
     "dll_path": "C:\\ibalance\\rtslabelscale.dll",

@@ -107,7 +107,12 @@ La primera vez crea su `config.json`, busca sola la DLL y muestra una tarjeta
 |---|---|
 | **Archivo de productos** | Botón *Elegir*. Seleccione el `cadtxt.txt` que exporta el ERP (suele estar en una unidad de red, p. ej. `X:\cadtxt.txt`). |
 | **Librería rtslabelscale.dll** | Normalmente ya aparece en verde. Si no, *Buscar* y señale `C:\ibalance\rtslabelscale.dll`. **Elija la de `C:\ibalance`, no la de `C:\ibalance\RLS1000`**: son archivos distintos con el mismo nombre y la de `RLS1000` es una versión más antigua. |
-| **Balanzas activas con IP** | *Configurar*. Por cada balanza: marque **Activa** y escriba su **IP**. El puerto es 4000 salvo que el instalador lo cambiara. Pulse *Guardar*. |
+| **Balanzas activas con IP** | *Configurar*. Por cada balanza: marque **Activa** y escriba su **IP**. **Deje el puerto en 5001**; ver el aviso de abajo. Pulse *Guardar*. |
+
+> **Sobre el puerto.** Las RLS-1000 escuchan en el **5001**, y ese valor está
+> compilado dentro de `rtslabelscale.dll`: el campo *Puerto* de la aplicación
+> **no cambia a dónde se conecta**, solo se usa para el sondeo de diagnóstico.
+> Cambiarlo no arregla nada y hace que *Probar* informe mal.
 
 La tarjeta desaparece sola cuando los tres están resueltos. No hay que editar
 ningún archivo a mano.
@@ -176,6 +181,7 @@ disparo.
 | Al cargar la DLL: «no se encuentra el módulo» | Falta la carpeta `RLS1000` junto a la DLL, o el Visual C++ Runtime. Restaure la carpeta del fabricante. |
 | **Todas** las balanzas dan «no aceptó la conexión», pero responden al ping | La aplicación antigua (`ibalance.exe`, la de C#) quedó residente en segundo plano y retiene la única conexión que admite cada balanza. Ciérrela: `taskkill /F /IM ibalance.exe`. Para que se cierre sola antes de cada corrida, marque la casilla correspondiente en *Ajustes*. |
 | Una balanza concreta no responde al ping | Red, VLAN o balanza apagada. No es un problema de la aplicación. |
+| *Probar* dice «responde al ping» pero el puerto falla | El ping es ICMP y no usa puertos; el sondeo es TCP. Si el puerto configurado no es **5001**, corríjalo. Si ya es 5001 y aun así falla, la balanza está encendida pero su servicio no acepta conexiones: casi siempre es la aplicación antigua reteniendo la sesión (fila anterior). La sincronización puede funcionar igual, porque la conexión real la abre la DLL. |
 | La balanza acepta todo pero no cambia nada | Revise `logs\reportes\` y contraste con `docs\DLL_RTSLABELSCALE.md` §3.3. |
 | Precios en cero en la etiqueta | Campos numéricos enviados como texto. Ver `docs\DLL_RTSLABELSCALE.md` §3.2. |
 | Fechas de vencimiento equivocadas | El campo de vida útil. Ver `docs\FORMATO_CADTXT.md`. |

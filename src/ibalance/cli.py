@@ -14,7 +14,13 @@ import sys
 from pathlib import Path
 
 from . import __version__, net, procesos
-from .config import Config, ConfigError, config_por_defecto, ruta_config_por_defecto
+from .config import (
+    PUERTO_RLS1000,
+    Config,
+    ConfigError,
+    config_por_defecto,
+    ruta_config_por_defecto,
+)
 from .engine import MotorSincronizacion, crear_backend
 from .logging_setup import configurar, obtener
 from .report import resumen_texto
@@ -133,13 +139,24 @@ def cmd_check(args: argparse.Namespace) -> int:
     for balanza in activas:
         if args.sin_red:
             print(f"  [{balanza.id}] {balanza.nombre} {balanza.ip}:{balanza.puerto}")
-            continue
-        responde = net.ping(balanza.ip, config.sincronizacion.timeout_ping_seg)
-        abierto, motivo = net.puerto_abierto(balanza.ip, balanza.puerto, 2.0)
-        estado = "OK" if abierto else ("ping OK" if responde else "SIN RESPUESTA")
-        print(f"  [{balanza.id}] {balanza.nombre} {balanza.ip}:{balanza.puerto} - {estado}")
-        if not abierto:
-            print(f"        {motivo}")
+        else:
+            responde = net.ping(balanza.ip, config.sincronizacion.timeout_ping_seg)
+            abierto, motivo = net.puerto_abierto(balanza.ip, balanza.puerto, 2.0)
+            estado = "OK" if abierto else ("ping OK" if responde else "SIN RESPUESTA")
+            print(
+                f"  [{balanza.id}] {balanza.nombre} {balanza.ip}:{balanza.puerto} - {estado}"
+            )
+            if not abierto:
+                print(f"        {motivo}")
+
+        # El aviso va fuera del sondeo: es un problema de configuracion y hay
+        # que verlo tambien con --sin-red.
+        if balanza.puerto != PUERTO_RLS1000:
+            print(
+                f"        AVISO: las RLS-1000 escuchan en el {PUERTO_RLS1000}; "
+                f"el {balanza.puerto} solo afecta a este sondeo, no a la conexion "
+                "real, que abre la DLL"
+            )
 
     print("\nSin problemas bloqueantes." if not problemas else f"\n{problemas} problema(s).")
     return OK if not problemas else ERROR

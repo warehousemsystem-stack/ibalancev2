@@ -462,14 +462,40 @@ class MotorSincronizacion:
         )
 
     def probar_balanza(self, balanza: Balanza) -> tuple[bool, str]:
-        """Comprueba red y, si se puede, pregunta el modelo a la balanza."""
+        """Comprueba la red de la balanza y explica cada parte por separado.
+
+        Son dos comprobaciones distintas y conviene no confundirlas: el ping es
+        ICMP y no tiene puertos, mientras que el sondeo abre una conexion TCP
+        al puerto. Una balanza que responde al ping pero rechaza el puerto esta
+        encendida y en la red; lo que falla es el servicio.
+
+        El sondeo no decide por si solo: la conexion real la abre la DLL, asi
+        que una balanza que responde al ping se da por alcanzable aunque el
+        sondeo falle, y el motivo queda en el mensaje.
+        """
         sinc = self.config.sincronizacion
-        if sinc.verificar_ping and not net.ping(balanza.ip, sinc.timeout_ping_seg):
-            return False, f"{balanza.ip} no responde al ping"
-        disponible, motivo = net.puerto_abierto(
+        partes: list[str] = []
+
+        responde_ping = None
+        if sinc.verificar_ping:
+            responde_ping = net.ping(balanza.ip, sinc.timeout_ping_seg)
+            partes.append("ping OK" if responde_ping else "sin respuesta al ping")
+
+        abierto, motivo = net.puerto_abierto(
             balanza.ip, balanza.puerto, float(sinc.timeout_ping_seg)
         )
-        return disponible, motivo
+        partes.append(
+            f"puerto {balanza.puerto} accesible" if abierto else motivo
+        )
+
+        # El sondeo abre y cierra una conexion TCP. Como la balanza admite una
+        # sola, se le da un momento para liberarla antes de que alguien pulse
+        # «Sincronizar» a continuacion.
+        if abierto and sinc.pausa_tras_desconectar_seg > 0:
+            time.sleep(sinc.pausa_tras_desconectar_seg)
+
+        alcanzable = abierto or bool(responde_ping)
+        return alcanzable, " · ".join(partes)
 
 
 def crear_backend(config: Config, simular: bool = False) -> BackendBalanza:

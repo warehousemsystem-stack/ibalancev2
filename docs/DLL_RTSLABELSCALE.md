@@ -165,7 +165,67 @@ temporizador y la siguiente corrida falla sin motivo aparente.
 
 ---
 
-## 6. Exportaciones no usadas que podrían servir
+## 6. El puerto TCP es el 5001, y está compilado dentro
+
+`rtscaleConnect(addr, baudRate, connId)` **no recibe el puerto**. La DLL lo
+lleva fijo. Se ve desensamblando la función (base de imagen `0x00400000`,
+`rtscaleConnect` en RVA `0x232d74`):
+
+```asm
+00632e4d  add    eax, 0x1a0            ; campo Host del cliente Indy
+00632e52  mov    edx, dword ptr [ebp+8] ; arg1 = la IP que le pasamos
+00632e55  call   0x40ad40              ; asigna el host
+00632e5a  push   0x1389                ; <-- puerto 5001
+00632e65  call   0x40ad40
+00632e76  call   0x60e600              ; conecta
+00632e82  mov    dword ptr [eax+0x60], 0x4b0   ; 1200, tiempo de espera
+```
+
+`0x1389` = **5001**. La DLL es Delphi y usa **Indy** (`TIdTCPClient`), lo que
+explica que el puerto sea una constante numérica y no aparezca como cadena.
+
+### 6.1 El segundo argumento no es un baudrate
+
+Se llama `BaudRate` en la declaración de la aplicación original, pero la DLL lo
+usa como **selector de transporte**:
+
+```asm
+00632df6  mov    eax, dword ptr [ebp+0xc]   ; arg2
+00632df9  sub    eax, 1
+00632dfc  jb     0x632e02                   ; 0  -> modo 0
+00632dfe  je     0x632e0f                   ; 1  -> modo 1
+00632e00  jmp    0x632e1c                   ; >1 -> modo 2
+```
+
+La aplicación original pasa **siempre `0`** en las cuatro llamadas que hace, y
+`0` es el modo de red. Esta aplicación pasa lo mismo (`rongta.baudrate: 0`).
+No lo cambie sin motivo: otro valor selecciona otro transporte.
+
+### 6.2 El `Port=` de `SYSTEM.CFG` es el puerto serie
+
+En `C:\ibalance\RLS1000\SYSTEM.CFG` hay una sección que despista:
+
+```ini
+[Comm]
+CommType=1
+Port=
+BaudRate=9600
+IP=10.23.18.253
+```
+
+Ese `Port=` es el puerto **COM**, como delata el `BaudRate=9600` de al lado.
+El puerto TCP no está ahí ni en ningún otro archivo de configuración: solo en
+el código de la DLL.
+
+### 6.3 Consecuencia práctica
+
+El campo `puerto` del `config.json` **no cambia a dónde se conecta la DLL**.
+Sirve únicamente para el sondeo TCP de diagnóstico, que comprueba si algo
+escucha en esa dirección. Por eso el sondeo está desactivado por defecto en la
+sincronización (`sincronizacion.verificar_puerto: false`): abre y cierra una
+conexión, y estas balanzas admiten una sola.
+
+## 7. Exportaciones no usadas que podrían servir
 
 `C:\ibalance\rtslabelscale.dll` exporta 78 funciones. Además de las nueve que
 usa la aplicación, hay algunas con potencial:
@@ -185,10 +245,10 @@ pila. Si el fabricante facilita el SDK, añadirlas es directo.
 
 ---
 
-## 7. Cómo reproducir este análisis
+## 8. Cómo reproducir este análisis
 
 ```bash
-# Exportaciones y arquitectura (sin cargar la DLL, funciona en cualquier SO)
+# Exportaciones, arquitectura y puerto TCP (sin cargar la DLL, en cualquier SO)
 python tools/inspect_dll.py C:\ibalance\rtslabelscale.dll
 
 # Declaraciones P/Invoke de la aplicación original

@@ -9,10 +9,18 @@ from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Any
 
-VERSION_CONFIG = 2
+VERSION_CONFIG = 3
 
 # Nombre de archivo por defecto, junto al ejecutable o al paquete.
 NOMBRE_CONFIG = "config.json"
+
+#: Puerto TCP en el que escuchan las RLS-1000. Esta compilado dentro de
+#: rtslabelscale.dll (instruccion ``push 0x1389`` en rtscaleConnect), no se
+#: puede configurar en la balanza desde aqui.
+PUERTO_RLS1000 = 5001
+
+#: Valor equivocado que traia la version 2 de este archivo. Se migra solo.
+PUERTO_ERRONEO_V2 = 4000
 
 
 class ConfigError(Exception):
@@ -77,7 +85,11 @@ class Balanza:
     nombre: str = ""
     activa: bool = False
     conn_id: str = ""       # identificador que se le pasa a la DLL
-    puerto: int = 4000      # puerto TCP de la balanza (sondeo previo)
+    # 5001 esta extraido del propio codigo de rtslabelscale.dll: el puerto no
+    # es configurable, la DLL lo lleva compilado (ver docs/DLL_RTSLABELSCALE.md
+    # §6). Solo se usa para el sondeo TCP de diagnostico; la conexion real la
+    # abre la DLL.
+    puerto: int = 5001
 
     def __post_init__(self) -> None:
         if not self.nombre:
@@ -404,6 +416,14 @@ def migrar(datos: dict[str, Any]) -> dict[str, Any]:
         origen["tipo"] = "txt_ancho_fijo"
     elif tipo_viejo == "CSV":
         origen["tipo"] = "csv"
+
+    # El puerto 4000 nunca funciono: fue un valor erroneo de la version 2 de
+    # este archivo. El puerto real de las RLS-1000 es el 5001, leido del codigo
+    # de la DLL. Se corrige solo cuando vale exactamente 4000, para no pisar un
+    # puerto que el operador haya cambiado a proposito.
+    for balanza in datos.get("balanzas", []) or []:
+        if isinstance(balanza, dict) and balanza.get("puerto") == PUERTO_ERRONEO_V2:
+            balanza["puerto"] = PUERTO_RLS1000
 
     datos["version"] = VERSION_CONFIG
     return datos

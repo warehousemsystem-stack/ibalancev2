@@ -24,7 +24,11 @@ PUESTA EN MARCHA (2 minutos)
 
        - Archivo de productos ... el cadtxt.txt que exporta el sistema
        - Libreria rtslabelscale.dll ... normalmente se detecta sola
-       - Balanzas activas con IP ... marque "Activa" y escriba la IP
+       - Balanzas activas con IP ... marque "Activa" y escriba la IP.
+         Deje el puerto en 5001: las RLS-1000 escuchan ahi, y ese valor
+         viene compilado dentro de la DLL del fabricante. El campo
+         "Puerto" solo se usa para el sondeo de diagnostico; no cambia
+         a donde se conecta la aplicacion.
 
   4. Pulse "Sincronizar".
 

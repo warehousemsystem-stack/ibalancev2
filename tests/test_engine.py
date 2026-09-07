@@ -184,3 +184,48 @@ def test_paralelo_respeta_una_conexion_por_balanza(
     resultado = _motor(config, backend).sincronizar()
     assert resultado.exitosas == 2
     assert not backend.hay_fugas
+
+
+def test_probar_informa_de_ping_y_puerto_por_separado(
+    config: Config, backend: BackendSimulado, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Son dos comprobaciones distintas: el ping es ICMP y no tiene puertos."""
+    from ibalance import net
+
+    config.sincronizacion.verificar_ping = True
+    monkeypatch.setattr(net, "ping", lambda ip, t=2: True)
+    monkeypatch.setattr(net, "puerto_abierto", lambda ip, p, t=2.0: (False, "rechazada"))
+
+    ok, motivo = _motor(config, backend).probar_balanza(config.balanzas[0])
+    assert "ping OK" in motivo
+    assert "rechazada" in motivo
+
+
+def test_un_sondeo_fallido_no_declara_inalcanzable_a_la_balanza(
+    config: Config, backend: BackendSimulado, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """La conexion real la abre la DLL, no el sondeo: si responde al ping, la
+    balanza esta en la red aunque el puerto sondeado no acepte."""
+    from ibalance import net
+
+    config.sincronizacion.verificar_ping = True
+    config.sincronizacion.pausa_tras_desconectar_seg = 0
+    monkeypatch.setattr(net, "ping", lambda ip, t=2: True)
+    monkeypatch.setattr(net, "puerto_abierto", lambda ip, p, t=2.0: (False, "cerrado"))
+
+    ok, _ = _motor(config, backend).probar_balanza(config.balanzas[0])
+    assert ok is True
+
+
+def test_sin_ping_ni_puerto_si_es_inalcanzable(
+    config: Config, backend: BackendSimulado, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ibalance import net
+
+    config.sincronizacion.verificar_ping = True
+    monkeypatch.setattr(net, "ping", lambda ip, t=2: False)
+    monkeypatch.setattr(net, "puerto_abierto", lambda ip, p, t=2.0: (False, "cerrado"))
+
+    ok, motivo = _motor(config, backend).probar_balanza(config.balanzas[0])
+    assert ok is False
+    assert "sin respuesta al ping" in motivo
