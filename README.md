@@ -159,6 +159,8 @@ código │ nombre               precio  vida útil
 
 ## Documentación
 
+- [`docs/INSTALACION.md`](docs/INSTALACION.md) — instrucciones completas para
+  quien instale en la tienda, autocontenidas.
 - [`docs/DLL_RTSLABELSCALE.md`](docs/DLL_RTSLABELSCALE.md) — firmas, formato
   del JSON y ciclo de sesión de la DLL, con la evidencia de dónde salió cada
   dato.
