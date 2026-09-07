@@ -64,10 +64,16 @@ sin lista se ordena por código, que sí es estable.
   widgets desde los hilos de trabajo. Funciona casi siempre y cuelga la
   aplicación de vez en cuando. Aquí todo pasa por una cola que vacía el hilo de
   la interfaz.
-- Botón **Forzar limpieza** por balanza (`rtscaleClearPLUData`), *Probar*
-  individual y masivo, y estado en vivo por balanza.
+- Botón **Vaciar** por balanza (`rtscaleClearPLUData`), *Probar* individual y
+  masivo, y estado en vivo por balanza.
 - Aviso al cerrar si hay una corrida en marcha, para no dejar una conexión
   abierta.
+- **Rediseño completo**: barra lateral en vez de pestañas, tarjeta por balanza
+  con indicador de estado, métricas de la corrida, vista previa del archivo de
+  origen y tema claro/oscuro. El aspecto está aislado en `gui/tema.py`, sobre
+  el tema `clam` (el único de los incorporados cuyos elementos aceptan colores
+  planos; el tema nativo de Windows dibuja bordes y degradados propios que no
+  se pueden quitar).
 
 ## Operación
 

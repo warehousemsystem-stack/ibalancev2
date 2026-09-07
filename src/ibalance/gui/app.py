@@ -1,11 +1,18 @@
 """Ventana principal de ibalance.
 
-tkinter no es seguro entre hilos: solo el hilo de la interfaz puede tocar los
-widgets. La sincronizacion corre en un hilo aparte para que la ventana no se
-congele, asi que todo lo que llega desde ese hilo (lineas de log, cambios de
-estado, el resultado final) pasa por una cola que el hilo de la interfaz vacia
-con ``after``. Llamar a los widgets directamente desde el hilo de trabajo
-funciona casi siempre y cuelga la aplicacion de vez en cuando, que es peor.
+Dos decisiones estructurales explican el resto del archivo:
+
+**Hilos.** tkinter solo puede tocarse desde el hilo que creo la ventana. La
+sincronizacion corre aparte para que la interfaz no se congele, asi que todo lo
+que vuelve de ese hilo —lineas de log, cambios de estado, el resultado final—
+pasa por una cola que el hilo de la interfaz vacia con ``after``. Escribir en
+los widgets desde el hilo de trabajo funciona casi siempre y cuelga la
+aplicacion de vez en cuando, que es peor que fallar siempre.
+
+**Aspecto.** No hay pestañas: una barra lateral cambia la vista y el contenido
+se apila con ``grid`` en la misma celda. Los colores viven en ``tema.py`` y las
+piezas visuales en ``widgets.py``, de modo que cambiar de claro a oscuro es
+recorrer una lista de repintados y no tocar esta ventana.
 """
 
 from __future__ import annotations
@@ -16,6 +23,7 @@ import threading
 import tkinter as tk
 from collections.abc import Callable
 from contextlib import suppress
+from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Any
@@ -26,26 +34,39 @@ from ..logging_setup import ManejadorCallback, configurar, obtener
 from ..models import ResultadoSincronizacion
 from ..report import resumen_texto
 from ..scheduler import Temporizador
+from ..sources import OrigenError, leer
+from .tema import TEMAS, Fuentes, Tema, aplicar
+from .widgets import Insignia, Metrica, PanelDesplazable, Punto, Tarjeta, campo, separador
 
 log = obtener("gui")
 
-COLORES = {
-    "ERROR": "#f44747",
-    "CRITICAL": "#f44747",
-    "WARNING": "#dcdcaa",
-    "INFO": "#d4d4d4",
-    "DEBUG": "#808080",
+#: Estado de cada balanza: (rotulo, atributo de color del tema).
+ESTADOS: dict[str, tuple[str, str]] = {
+    "inactiva": ("Inactiva", "neutro"),
+    "espera": ("En espera", "neutro"),
+    "verificando": ("Comprobando red", "acento"),
+    "conectando": ("Conectando", "acento"),
+    "enviando": ("Enviando", "acento"),
+    "reintentando": ("Reintentando", "aviso"),
+    "ok": ("Al dia", "exito"),
+    "error": ("Con error", "error"),
+    "omitida": ("Sin cambios", "neutro"),
 }
 
-ESTADOS = {
-    "verificando": ("comprobando red...", "#569cd6"),
-    "conectando": ("conectando...", "#569cd6"),
-    "enviando": ("enviando", "#569cd6"),
-    "reintentando": ("reintentando", "#dcdcaa"),
-    "ok": ("correcta", "#6a9955"),
-    "error": ("con error", "#f44747"),
-    "omitida": ("sin cambios", "#808080"),
-}
+VISTAS = (
+    ("resumen", "Resumen"),
+    ("balanzas", "Balanzas"),
+    ("origen", "Origen"),
+    ("ajustes", "Ajustes"),
+)
+
+
+def _ruta_corta(ruta: Path, segmentos: int = 3) -> str:
+    """Ultimos tramos de una ruta, para que no desborde la ventana."""
+    partes = ruta.parts
+    if len(partes) <= segmentos:
+        return str(ruta)
+    return "…" + str(Path(*partes[-segmentos:]))
 
 
 class Aplicacion:
@@ -68,18 +89,28 @@ class Aplicacion:
         )
         self.hilo: threading.Thread | None = None
         self.filas: dict[int, dict[str, Any]] = {}
+        self.vistas: dict[str, ttk.Frame] = {}
+        self.botones_nav: dict[str, ttk.Button] = {}
+        self._repintables: list[Any] = []
+        self._vista_actual = "resumen"
+        self._marcador = True
 
         self.raiz = tk.Tk()
-        self.raiz.title(
-            "ibalance - sincronizacion de balanzas Rongta"
-            + ("  [MODO SIMULACION]" if simular else "")
-        )
-        self.raiz.geometry("900x650")
-        self.raiz.minsize(780, 520)
+        self.raiz.title("ibalance" + ("  ·  simulacion" if simular else ""))
+        self.raiz.geometry("1060x700")
+        self.raiz.minsize(940, 600)
+
+        self.fuentes = Fuentes()
+        self.tema: Tema = TEMAS["claro"]
+        self.estilo = ttk.Style(self.raiz)
+        aplicar(self.estilo, self.tema, self.fuentes)
+        self.raiz.configure(background=self.tema.fondo)
+
         self._construir()
         self._enganchar_log()
+        self._volcar_config_a_ui()
         self.raiz.protocol("WM_DELETE_WINDOW", self._cerrar)
-        self.raiz.after(100, self._vaciar_cola)
+        self.raiz.after(120, self._vaciar_cola)
 
     # ------------------------------------------------------------------ #
     # Configuracion
@@ -100,193 +131,452 @@ class Aplicacion:
             return config
 
     # ------------------------------------------------------------------ #
-    # Construccion de la interfaz
+    # Estructura
     # ------------------------------------------------------------------ #
 
     def _construir(self) -> None:
-        self.cuaderno = ttk.Notebook(self.raiz)
-        self.cuaderno.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
-        self._pestana_log()
-        self._pestana_balanzas()
-        self._pestana_config()
+        self.raiz.columnconfigure(0, weight=1)
+        self.raiz.rowconfigure(1, weight=1)
+
+        self._cabecera()
+
+        cuerpo = ttk.Frame(self.raiz)
+        cuerpo.grid(row=1, column=0, sticky="nsew")
+        cuerpo.columnconfigure(1, weight=1)
+        cuerpo.rowconfigure(0, weight=1)
+
+        self._lateral(cuerpo)
+
+        self.contenido = ttk.Frame(cuerpo)
+        self.contenido.grid(row=0, column=1, sticky="nsew")
+        self.contenido.columnconfigure(0, weight=1)
+        self.contenido.rowconfigure(0, weight=1)
+
+        self.vistas["resumen"] = self._vista_resumen()
+        self.vistas["balanzas"] = self._vista_balanzas()
+        self.vistas["origen"] = self._vista_origen()
+        self.vistas["ajustes"] = self._vista_ajustes()
+        for vista in self.vistas.values():
+            vista.grid(row=0, column=0, sticky="nsew")
+
+        self._pie()
+        self._mostrar("resumen")
+
+    def _cabecera(self) -> None:
+        barra = ttk.Frame(self.raiz, style="Barra.TFrame", padding=(20, 14))
+        barra.grid(row=0, column=0, sticky="ew")
+        barra.columnconfigure(1, weight=1)
+
+        marca = ttk.Frame(barra, style="Barra.TFrame")
+        marca.grid(row=0, column=0, sticky="w")
+        ttk.Label(marca, text="ibalance", style="Titulo.TLabel").pack(side="left")
+        subtitulo = "modo simulacion" if self.simular else "balanzas Rongta RLS-1000"
+        ttk.Label(marca, text=subtitulo, style="TenueSup.TLabel").pack(
+            side="left", padx=(10, 0), pady=(5, 0)
+        )
+
+        acciones = ttk.Frame(barra, style="Barra.TFrame")
+        acciones.grid(row=0, column=2, sticky="e")
+
+        self.btn_tema = ttk.Button(acciones, text="Oscuro", style="Icono.TButton",
+                                   command=self._alternar_tema, width=7)
+        self.btn_tema.pack(side="left", padx=(0, 8))
+
+        self.btn_timer = ttk.Button(acciones, text="Automatico", style="Secundario.TButton",
+                                    command=self._alternar_temporizador)
+        self.btn_timer.pack(side="left", padx=(0, 8))
+
+        self.btn_detener = ttk.Button(acciones, text="Detener", style="Secundario.TButton",
+                                      command=self._detener, state="disabled")
+        self.btn_detener.pack(side="left", padx=(0, 8))
+
+        self.btn_sync = ttk.Button(acciones, text="Sincronizar", style="Primario.TButton",
+                                   command=self._sincronizar)
+        self.btn_sync.pack(side="left")
+
+        linea = separador(self.raiz)
+        linea.grid(row=0, column=0, sticky="sew")
+
+    def _lateral(self, padre: ttk.Frame) -> None:
+        lateral = ttk.Frame(padre, style="Lateral.TFrame", padding=(12, 18, 12, 18))
+        lateral.grid(row=0, column=0, sticky="nsw")
+
+        for clave, rotulo in VISTAS:
+            boton = ttk.Button(lateral, text=rotulo, style="Nav.TButton", width=15,
+                               command=lambda c=clave: self._mostrar(c))
+            boton.pack(fill="x", pady=1)
+            self.botones_nav[clave] = boton
+
+        relleno = ttk.Frame(lateral, style="Lateral.TFrame")
+        relleno.pack(fill="both", expand=True)
+
+        self.lbl_backend = ttk.Label(lateral, text="", style="Tenue.TLabel",
+                                     wraplength=150, justify="left")
+        self.lbl_backend.pack(anchor="w", pady=(12, 0))
+
+        separador(padre, horizontal=False).grid(row=0, column=0, sticky="nse")
+
+    def _pie(self) -> None:
+        separador(self.raiz).grid(row=2, column=0, sticky="ew")
+        pie = ttk.Frame(self.raiz, style="Barra.TFrame", padding=(20, 8))
+        pie.grid(row=3, column=0, sticky="ew")
+        pie.columnconfigure(1, weight=1)
+
+        self.punto_global = Punto(pie, self.tema, 8)
+        self.punto_global.grid(row=0, column=0, padx=(0, 8))
+        self._repintables.append(self.punto_global)
 
         self.estado_var = tk.StringVar(value="Listo")
-        ttk.Label(
-            self.raiz, textvariable=self.estado_var, relief=tk.SUNKEN, anchor=tk.W
-        ).pack(fill=tk.X, side=tk.BOTTOM, padx=6, pady=(0, 4))
-
-    def _pestana_log(self) -> None:
-        pestana = ttk.Frame(self.cuaderno)
-        self.cuaderno.add(pestana, text="  Actividad  ")
-
-        barra = ttk.Frame(pestana)
-        barra.pack(fill=tk.X, padx=6, pady=6)
-
-        self.btn_sync = ttk.Button(barra, text="Sincronizar ahora", command=self._sincronizar)
-        self.btn_sync.pack(side=tk.LEFT)
-        self.btn_detener = ttk.Button(
-            barra, text="Detener", command=self._detener, state=tk.DISABLED
+        ttk.Label(pie, textvariable=self.estado_var, style="TenueSup.TLabel").grid(
+            row=0, column=1, sticky="w"
         )
-        self.btn_detener.pack(side=tk.LEFT, padx=4)
 
-        ttk.Separator(barra, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8)
-
-        self.btn_timer = ttk.Button(
-            barra, text="Iniciar automatico", command=self._alternar_temporizador
-        )
-        self.btn_timer.pack(side=tk.LEFT)
         self.timer_var = tk.StringVar(value="")
-        ttk.Label(barra, textvariable=self.timer_var).pack(side=tk.LEFT, padx=8)
+        ttk.Label(pie, textvariable=self.timer_var, style="TenueSup.TLabel").grid(
+            row=0, column=2, sticky="e"
+        )
 
-        ttk.Button(barra, text="Limpiar vista", command=self._limpiar_log).pack(side=tk.RIGHT)
+    def _mostrar(self, clave: str) -> None:
+        self._vista_actual = clave
+        self.vistas[clave].tkraise()
+        for nombre, boton in self.botones_nav.items():
+            boton.configure(style="NavActiva.TButton" if nombre == clave else "Nav.TButton")
 
-        marco = ttk.Frame(pestana)
-        marco.pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 6))
+    # ------------------------------------------------------------------ #
+    # Vista: resumen
+    # ------------------------------------------------------------------ #
+
+    def _vista_resumen(self) -> ttk.Frame:
+        vista = ttk.Frame(self.contenido, padding=(20, 18))
+        vista.columnconfigure(0, weight=1)
+        vista.rowconfigure(2, weight=1)
+
+        tarjeta = Tarjeta(vista, self.tema, relleno=18)
+        tarjeta.grid(row=0, column=0, sticky="ew")
+        self._repintables.append(tarjeta)
+        for i in range(4):
+            tarjeta.columnconfigure(i, weight=1, uniform="metricas")
+
+        self.met_productos = Metrica(tarjeta, "productos en el origen")
+        self.met_balanzas = Metrica(tarjeta, "balanzas activas")
+        self.met_ok = Metrica(tarjeta, "al dia")
+        self.met_ultima = Metrica(tarjeta, "ultima sincronizacion")
+        for i, metrica in enumerate(
+            (self.met_productos, self.met_balanzas, self.met_ok, self.met_ultima)
+        ):
+            metrica.grid(row=0, column=i, sticky="w", padx=(0 if i == 0 else 12, 0))
+
+        self.progreso = ttk.Progressbar(vista, style="Fina.Horizontal.TProgressbar",
+                                        mode="indeterminate")
+        self.progreso.grid(row=1, column=0, sticky="ew", pady=(14, 0))
+        self.progreso.grid_remove()
+
+        registro = Tarjeta(vista, self.tema, relleno=0)
+        registro.grid(row=2, column=0, sticky="nsew", pady=(14, 0))
+        registro.columnconfigure(0, weight=1)
+        registro.rowconfigure(1, weight=1)
+        self._repintables.append(registro)
+
+        encabezado = ttk.Frame(registro, style="Superficie.TFrame", padding=(16, 12))
+        encabezado.grid(row=0, column=0, sticky="ew")
+        encabezado.columnconfigure(1, weight=1)
+        ttk.Label(encabezado, text="Actividad", style="SeccionSup.TLabel").grid(
+            row=0, column=0, sticky="w"
+        )
+        ttk.Button(encabezado, text="Limpiar", style="Sutil.TButton",
+                   command=self._limpiar_log).grid(row=0, column=2, sticky="e")
+
+        marco = ttk.Frame(registro, style="Superficie.TFrame")
+        marco.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 16))
+        marco.columnconfigure(0, weight=1)
+        marco.rowconfigure(0, weight=1)
+
         self.texto = tk.Text(
-            marco, wrap=tk.WORD, font=("Consolas", 9), state=tk.DISABLED,
-            bg="#1e1e1e", fg="#d4d4d4", insertbackground="white",
+            marco, wrap="word", font=self.fuentes.mono, state="disabled",
+            background=self.tema.superficie_alt, foreground=self.tema.texto,
+            insertbackground=self.tema.texto, relief="flat", bd=0,
+            padx=14, pady=12, spacing1=1, spacing3=1, height=10,
+            highlightthickness=0,
         )
-        barra_v = ttk.Scrollbar(marco, orient=tk.VERTICAL, command=self.texto.yview)
-        self.texto.configure(yscrollcommand=barra_v.set)
-        barra_v.pack(side=tk.RIGHT, fill=tk.Y)
-        self.texto.pack(fill=tk.BOTH, expand=True)
-        for nivel, color in COLORES.items():
-            self.texto.tag_configure(nivel, foreground=color)
+        barra = ttk.Scrollbar(marco, orient="vertical", style="Fina.Vertical.TScrollbar",
+                              command=self.texto.yview)
+        self.texto.configure(yscrollcommand=barra.set)
+        self.texto.grid(row=0, column=0, sticky="nsew")
+        barra.grid(row=0, column=1, sticky="ns")
+        self._aplicar_tema_al_log()
+        self._mostrar_marcador()
 
-    def _pestana_balanzas(self) -> None:
-        pestana = ttk.Frame(self.cuaderno)
-        self.cuaderno.add(pestana, text="  Balanzas  ")
+        return vista
 
-        cabecera = ttk.Frame(pestana)
-        cabecera.pack(fill=tk.X, padx=8, pady=8)
-        ttk.Label(
-            cabecera, text="Balanzas de la red", font=("Segoe UI", 11, "bold")
-        ).pack(side=tk.LEFT)
-        ttk.Button(cabecera, text="Guardar cambios", command=self._guardar_balanzas).pack(
-            side=tk.RIGHT
-        )
-        ttk.Button(cabecera, text="Probar todas", command=self._probar_todas).pack(
-            side=tk.RIGHT, padx=4
-        )
+    # ------------------------------------------------------------------ #
+    # Vista: balanzas
+    # ------------------------------------------------------------------ #
 
-        lienzo = tk.Canvas(pestana, highlightthickness=0)
-        barra_v = ttk.Scrollbar(pestana, orient=tk.VERTICAL, command=lienzo.yview)
-        interior = ttk.Frame(lienzo)
-        interior.bind(
-            "<Configure>", lambda e: lienzo.configure(scrollregion=lienzo.bbox("all"))
+    def _vista_balanzas(self) -> ttk.Frame:
+        vista = ttk.Frame(self.contenido, padding=(20, 18))
+        vista.columnconfigure(0, weight=1)
+        vista.rowconfigure(1, weight=1)
+
+        encabezado = ttk.Frame(vista)
+        encabezado.grid(row=0, column=0, sticky="ew", pady=(0, 14))
+        encabezado.columnconfigure(1, weight=1)
+        ttk.Label(encabezado, text="Balanzas", style="Seccion.TLabel").grid(
+            row=0, column=0, sticky="w"
         )
-        lienzo.create_window((0, 0), window=interior, anchor="nw")
-        lienzo.configure(yscrollcommand=barra_v.set)
-        barra_v.pack(side=tk.RIGHT, fill=tk.Y)
-        lienzo.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+        ttk.Button(encabezado, text="Guardar", style="Secundario.TButton",
+                   command=self._guardar_balanzas).grid(row=0, column=2, padx=(8, 0))
+        ttk.Button(encabezado, text="Probar todas", style="Secundario.TButton",
+                   command=self._probar_todas).grid(row=0, column=3, padx=(8, 0))
+
+        panel = PanelDesplazable(vista, self.tema)
+        panel.grid(row=1, column=0, sticky="nsew")
+        self._repintables.append(panel)
 
         for balanza in self.config.balanzas:
-            self._fila_balanza(interior, balanza)
+            self._tarjeta_balanza(panel.interior, balanza)
 
-    def _fila_balanza(self, padre: ttk.Frame, balanza: Balanza) -> None:
-        marco = ttk.LabelFrame(padre, text=f"{balanza.id}. {balanza.nombre}", padding=6)
-        marco.pack(fill=tk.X, pady=3, padx=2)
+        return vista
+
+    def _tarjeta_balanza(self, padre: ttk.Frame, balanza: Balanza) -> None:
+        """Tarjeta de una balanza, en dos filas.
+
+        Identidad y acciones arriba, campos abajo. En una sola fila los tres
+        bloques no caben en la anchura minima de la ventana y las acciones se
+        recortaban; separados, cada fila necesita la mitad de ancho y la
+        tarjeta aguanta cualquier tamaño.
+        """
+        tarjeta = Tarjeta(padre, self.tema, relleno=14)
+        tarjeta.pack(fill="x", pady=(0, 8), padx=(0, 4))
+        # El hueco elastico va en una columna vacia: grid encoge primero las
+        # columnas con peso, y si ese peso lo llevara un bloque con contenido,
+        # ese contenido se recortaria al estrechar la ventana.
+        tarjeta.columnconfigure(2, weight=1)
+        self._repintables.append(tarjeta)
+
+        punto = Punto(tarjeta, self.tema)
+        punto.grid(row=0, column=0, sticky="w", padx=(0, 12), pady=(4, 0))
+        self._repintables.append(punto)
+
+        identidad = ttk.Frame(tarjeta, style="Superficie.TFrame")
+        identidad.grid(row=0, column=1, sticky="w")
+        ttk.Label(identidad, text=balanza.nombre, style="Fuerte.TLabel").pack(anchor="w")
+        estado = ttk.Label(identidad, text="En espera", style="Neutro.TLabel")
+        estado.pack(anchor="w", pady=(1, 0))
+
+        acciones = ttk.Frame(tarjeta, style="Superficie.TFrame")
+        acciones.grid(row=0, column=3, sticky="e")
+        # Ancho explicito: sin el, clam reserva mucho mas del que ocupa el
+        # texto y los tres botones quedan desperdigados.
+        ttk.Button(acciones, text="Probar", style="Sutil.TButton", width=7,
+                   command=lambda b=balanza.id: self._probar(b)).pack(side="left", padx=(0, 4))
+        ttk.Button(acciones, text="Enviar", style="Sutil.TButton", width=7,
+                   command=lambda b=balanza.id: self._sincronizar([b])).pack(side="left", padx=(0, 4))
+        ttk.Button(acciones, text="Vaciar", style="Peligro.TButton", width=7,
+                   command=lambda b=balanza.id: self._limpiar_balanza(b)).pack(side="left")
+
+        formulario = ttk.Frame(tarjeta, style="Superficie.TFrame")
+        formulario.grid(row=1, column=1, columnspan=3, sticky="w", pady=(12, 0))
 
         activa = tk.BooleanVar(value=balanza.activa)
-        ttk.Checkbutton(marco, text="Activa", variable=activa).pack(side=tk.LEFT)
+        # pady baja la casilla hasta la linea de las cajas de texto, que van
+        # bajo su rotulo; centrada quedaria flotando entre rotulo y caja.
+        ttk.Checkbutton(formulario, text="Activa", variable=activa,
+                        command=self._refrescar_metricas).pack(
+            side="left", padx=(0, 20), pady=(14, 0), anchor="n")
 
-        ttk.Label(marco, text="IP:").pack(side=tk.LEFT, padx=(10, 2))
         ip = tk.StringVar(value=balanza.ip)
-        ttk.Entry(marco, textvariable=ip, width=16).pack(side=tk.LEFT)
+        campo(formulario, "direccion ip", ip, ancho=16).pack(side="left", padx=(0, 16))
 
-        ttk.Label(marco, text="Puerto:").pack(side=tk.LEFT, padx=(10, 2))
         puerto = tk.StringVar(value=str(balanza.puerto))
-        ttk.Entry(marco, textvariable=puerto, width=7).pack(side=tk.LEFT)
-
-        etiqueta = ttk.Label(marco, text="", width=26)
-        etiqueta.pack(side=tk.LEFT, padx=10)
-
-        ttk.Button(
-            marco, text="Probar", width=8,
-            command=lambda b=balanza.id: self._probar(b),
-        ).pack(side=tk.RIGHT)
-        ttk.Button(
-            marco, text="Sincronizar", width=12,
-            command=lambda b=balanza.id: self._sincronizar(solo=[b]),
-        ).pack(side=tk.RIGHT, padx=4)
-        ttk.Button(
-            marco, text="Forzar limpieza", width=15,
-            command=lambda b=balanza.id: self._limpiar_balanza(b),
-        ).pack(side=tk.RIGHT)
+        campo(formulario, "puerto", puerto, ancho=8).pack(side="left")
 
         self.filas[balanza.id] = {
-            "activa": activa, "ip": ip, "puerto": puerto, "etiqueta": etiqueta,
+            "activa": activa, "ip": ip, "puerto": puerto,
+            "estado": estado, "punto": punto, "tarjeta": tarjeta,
         }
 
-    def _pestana_config(self) -> None:
-        pestana = ttk.Frame(self.cuaderno)
-        self.cuaderno.add(pestana, text="  Configuracion  ")
-        marco = ttk.Frame(pestana, padding=12)
-        marco.pack(fill=tk.BOTH, expand=True)
+    # ------------------------------------------------------------------ #
+    # Vista: origen
+    # ------------------------------------------------------------------ #
 
-        origen = ttk.LabelFrame(marco, text="Origen de datos", padding=10)
-        origen.pack(fill=tk.X, pady=4)
-        fila = ttk.Frame(origen)
-        fila.pack(fill=tk.X)
-        ttk.Label(fila, text="Archivo:").pack(side=tk.LEFT)
-        self.var_ruta = tk.StringVar(value=self.config.origen.ruta)
-        ttk.Entry(fila, textvariable=self.var_ruta).pack(
-            side=tk.LEFT, fill=tk.X, expand=True, padx=6
-        )
-        ttk.Button(fila, text="Examinar...", command=self._elegir_origen).pack(side=tk.LEFT)
+    def _vista_origen(self) -> ttk.Frame:
+        vista = ttk.Frame(self.contenido, padding=(20, 18))
+        vista.columnconfigure(0, weight=1)
+        vista.rowconfigure(1, weight=1)
 
-        dll = ttk.LabelFrame(marco, text="Libreria del fabricante", padding=10)
-        dll.pack(fill=tk.X, pady=4)
-        fila = ttk.Frame(dll)
-        fila.pack(fill=tk.X)
-        ttk.Label(fila, text="rtslabelscale.dll:").pack(side=tk.LEFT)
-        self.var_dll = tk.StringVar(value=self.config.rongta.dll_path)
-        ttk.Entry(fila, textvariable=self.var_dll).pack(
-            side=tk.LEFT, fill=tk.X, expand=True, padx=6
+        tarjeta = Tarjeta(vista, self.tema, relleno=18)
+        tarjeta.grid(row=0, column=0, sticky="ew")
+        tarjeta.columnconfigure(0, weight=1)
+        self._repintables.append(tarjeta)
+
+        ttk.Label(tarjeta, text="Archivo de productos", style="SeccionSup.TLabel").grid(
+            row=0, column=0, sticky="w", columnspan=3
         )
-        ttk.Button(fila, text="Examinar...", command=self._elegir_dll).pack(side=tk.LEFT)
+
+        self.var_ruta = tk.StringVar()
+        fila = ttk.Frame(tarjeta, style="Superficie.TFrame")
+        fila.grid(row=1, column=0, sticky="ew", columnspan=3, pady=(12, 0))
+        fila.columnconfigure(0, weight=1)
+        ttk.Entry(fila, textvariable=self.var_ruta).grid(row=0, column=0, sticky="ew")
+        ttk.Button(fila, text="Examinar", style="Secundario.TButton",
+                   command=self._elegir_origen).grid(row=0, column=1, padx=(8, 0))
+        ttk.Button(fila, text="Analizar", style="Primario.TButton",
+                   command=self._analizar_origen).grid(row=0, column=2, padx=(8, 0))
+
+        self.lbl_origen = ttk.Label(tarjeta, text="Pulse «Analizar» para leer el archivo.",
+                                    style="TenueSup.TLabel")
+        self.lbl_origen.grid(row=2, column=0, sticky="w", columnspan=3, pady=(12, 0))
+
+        previa = Tarjeta(vista, self.tema, relleno=0)
+        previa.grid(row=1, column=0, sticky="nsew", pady=(14, 0))
+        previa.columnconfigure(0, weight=1)
+        previa.rowconfigure(1, weight=1)
+        self._repintables.append(previa)
+
+        encabezado = ttk.Frame(previa, style="Superficie.TFrame", padding=(16, 12))
+        encabezado.grid(row=0, column=0, sticky="ew")
+        ttk.Label(encabezado, text="Vista previa", style="SeccionSup.TLabel").pack(side="left")
+        self.insignia_previa = Insignia(encabezado, self.tema, self.fuentes, "sin datos")
+        self.insignia_previa.pack(side="left", padx=(10, 0))
+        self._repintables.append(self.insignia_previa)
+
+        marco = ttk.Frame(previa, style="Superficie.TFrame")
+        marco.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 16))
+        marco.columnconfigure(0, weight=1)
+        marco.rowconfigure(0, weight=1)
+
+        self.tabla = tk.Text(
+            marco, wrap="none", font=self.fuentes.mono, state="disabled",
+            background=self.tema.superficie_alt, foreground=self.tema.texto,
+            relief="flat", bd=0, padx=14, pady=12, height=12, highlightthickness=0,
+        )
+        barra = ttk.Scrollbar(marco, orient="vertical", style="Fina.Vertical.TScrollbar",
+                              command=self.tabla.yview)
+        self.tabla.configure(yscrollcommand=barra.set)
+        self.tabla.grid(row=0, column=0, sticky="nsew")
+        barra.grid(row=0, column=1, sticky="ns")
+        self.tabla.tag_configure("cabecera", foreground=self.tema.texto_tenue)
+        self.tabla.tag_configure("incidencia", foreground=self.tema.aviso)
+
+        return vista
+
+    # ------------------------------------------------------------------ #
+    # Vista: ajustes
+    # ------------------------------------------------------------------ #
+
+    def _vista_ajustes(self) -> ttk.Frame:
+        vista = ttk.Frame(self.contenido)
+        vista.columnconfigure(0, weight=1)
+        vista.rowconfigure(0, weight=1)
+
+        panel = PanelDesplazable(vista, self.tema)
+        panel.grid(row=0, column=0, sticky="nsew", padx=20, pady=18)
+        self._repintables.append(panel)
+        interior = panel.interior
+        interior.columnconfigure(0, weight=1)
+
+        # --- libreria ---
+        dll = Tarjeta(interior, self.tema, relleno=18)
+        dll.pack(fill="x", pady=(0, 12), padx=(0, 4))
+        dll.columnconfigure(0, weight=1)
+        self._repintables.append(dll)
+        ttk.Label(dll, text="Libreria del fabricante", style="SeccionSup.TLabel").grid(
+            row=0, column=0, sticky="w", columnspan=2
+        )
+        self.var_dll = tk.StringVar()
+        fila = ttk.Frame(dll, style="Superficie.TFrame")
+        fila.grid(row=1, column=0, sticky="ew", columnspan=2, pady=(12, 0))
+        fila.columnconfigure(0, weight=1)
+        ttk.Entry(fila, textvariable=self.var_dll).grid(row=0, column=0, sticky="ew")
+        ttk.Button(fila, text="Examinar", style="Secundario.TButton",
+                   command=self._elegir_dll).grid(row=0, column=1, padx=(8, 0))
         ttk.Label(
             dll,
-            text="La DLL es de 32 bits: la aplicacion debe ejecutarse con Python de 32 bits.",
-            foreground="#666",
-        ).pack(anchor=tk.W, pady=(6, 0))
+            text="rtslabelscale.dll es de 32 bits: la aplicacion debe ejecutarse "
+                 "con Python o un .exe de 32 bits.",
+            style="TenueSup.TLabel", wraplength=560, justify="left",
+        ).grid(row=2, column=0, sticky="w", columnspan=2, pady=(10, 0))
 
-        sinc = ttk.LabelFrame(marco, text="Sincronizacion", padding=10)
-        sinc.pack(fill=tk.X, pady=4)
-        self.var_intervalo = self._campo(sinc, "Intervalo automatico (minutos):",
-                                         self.config.sincronizacion.intervalo_minutos)
-        self.var_ping = self._campo(sinc, "Timeout de ping (segundos):",
-                                    self.config.sincronizacion.timeout_ping_seg)
-        self.var_reintentos = self._campo(sinc, "Reintentos por balanza:",
-                                          self.config.sincronizacion.reintentos)
-        self.var_lote = self._campo(sinc, "Productos por lote (0 = todos juntos):",
-                                    self.config.rongta.tamano_lote_plu)
+        # --- sincronizacion ---
+        sinc = Tarjeta(interior, self.tema, relleno=18)
+        sinc.pack(fill="x", pady=(0, 12), padx=(0, 4))
+        self._repintables.append(sinc)
+        ttk.Label(sinc, text="Sincronizacion", style="SeccionSup.TLabel").pack(anchor="w")
 
-        self.var_omitir = tk.BooleanVar(value=self.config.sincronizacion.omitir_si_sin_cambios)
-        ttk.Checkbutton(
-            sinc, text="Omitir balanzas cuyo catalogo ya esta al dia",
-            variable=self.var_omitir,
-        ).pack(anchor=tk.W, pady=2)
+        rejilla = ttk.Frame(sinc, style="Superficie.TFrame")
+        rejilla.pack(fill="x", pady=(12, 0))
+        self.var_intervalo = tk.StringVar()
+        self.var_ping = tk.StringVar()
+        self.var_reintentos = tk.StringVar()
+        self.var_lote = tk.StringVar()
+        for i, (rotulo, var) in enumerate((
+            ("intervalo (min)", self.var_intervalo),
+            ("timeout ping (s)", self.var_ping),
+            ("reintentos", self.var_reintentos),
+            ("productos por lote", self.var_lote),
+        )):
+            campo(rejilla, rotulo, var, ancho=10).grid(row=0, column=i, sticky="w",
+                                                       padx=(0 if i == 0 else 18, 0))
 
-        self.var_legacy = tk.BooleanVar(value=self.config.sincronizacion.cerrar_procesos_legacy)
-        ttk.Checkbutton(
-            sinc,
-            text="Cerrar la aplicacion antigua (ibalance.exe) antes de sincronizar",
-            variable=self.var_legacy,
-        ).pack(anchor=tk.W, pady=2)
+        self.var_omitir = tk.BooleanVar()
+        self.var_legacy = tk.BooleanVar()
+        self.var_limpiar = tk.BooleanVar()
+        for texto, var in (
+            ("Omitir las balanzas cuyo catalogo ya esta al dia", self.var_omitir),
+            ("Vaciar el catalogo antes de cada envio", self.var_limpiar),
+            ("Cerrar la aplicacion antigua (ibalance.exe) antes de sincronizar",
+             self.var_legacy),
+        ):
+            ttk.Checkbutton(sinc, text=texto, variable=var).pack(anchor="w", pady=(10, 0))
 
-        ttk.Button(marco, text="Guardar configuracion", command=self._guardar_config).pack(
-            anchor=tk.E, pady=10
-        )
+        # --- guardar ---
+        acciones = ttk.Frame(interior)
+        acciones.pack(fill="x", padx=(0, 4))
+        ttk.Button(acciones, text="Guardar configuracion", style="Primario.TButton",
+                   command=self._guardar_config).pack(side="right")
+        self.lbl_config = ttk.Label(acciones, text="", style="Tenue.TLabel",
+                                    wraplength=460, justify="left")
+        self.lbl_config.pack(side="left", anchor="w")
 
-    @staticmethod
-    def _campo(padre: ttk.Widget, etiqueta: str, valor: Any) -> tk.StringVar:
-        fila = ttk.Frame(padre)
-        fila.pack(fill=tk.X, pady=2)
-        ttk.Label(fila, text=etiqueta, width=38, anchor=tk.W).pack(side=tk.LEFT)
-        var = tk.StringVar(value=str(valor))
-        ttk.Entry(fila, textvariable=var, width=10).pack(side=tk.LEFT)
-        return var
+        return vista
+
+    # ------------------------------------------------------------------ #
+    # Tema
+    # ------------------------------------------------------------------ #
+
+    def _alternar_tema(self) -> None:
+        self.tema = TEMAS["oscuro" if self.tema.nombre == "claro" else "claro"]
+        aplicar(self.estilo, self.tema, self.fuentes)
+        self.raiz.configure(background=self.tema.fondo)
+        self.btn_tema.configure(text="Claro" if self.tema.oscuro else "Oscuro")
+        for pieza in self._repintables:
+            with suppress(tk.TclError):
+                pieza.repintar(self.tema)
+        self._aplicar_tema_al_log()
+        for datos in self.filas.values():
+            self._repintar_estado(datos)
+
+    def _aplicar_tema_al_log(self) -> None:
+        for widget in (self.texto, getattr(self, "tabla", None)):
+            if widget is None:
+                continue
+            widget.configure(background=self.tema.superficie_alt, foreground=self.tema.texto,
+                             insertbackground=self.tema.texto)
+        for nivel, color in (
+            ("DEBUG", self.tema.neutro), ("INFO", self.tema.texto_tenue),
+            ("WARNING", self.tema.aviso), ("ERROR", self.tema.error),
+            ("CRITICAL", self.tema.error),
+        ):
+            self.texto.tag_configure(nivel, foreground=color)
+        tabla = getattr(self, "tabla", None)
+        if tabla is not None:
+            tabla.tag_configure("cabecera", foreground=self.tema.texto_tenue)
+            tabla.tag_configure("incidencia", foreground=self.tema.aviso)
+
+    def _repintar_estado(self, datos: dict[str, Any]) -> None:
+        rotulo, color = datos.get("ultimo_estado", ("En espera", "neutro"))
+        datos["estado"].configure(text=rotulo, style=f"{color.capitalize()}.TLabel")
+        datos["punto"].pintar(getattr(self.tema, color))
 
     # ------------------------------------------------------------------ #
     # Puente entre hilos
@@ -313,25 +603,47 @@ class Aplicacion:
                     self._al_terminar(dato)
         except queue.Empty:
             pass
+
         if self.temporizador.activo:
             restantes = self.temporizador.segundos_restantes()
-            self.timer_var.set(f"proxima corrida en {restantes // 60:02d}:{restantes % 60:02d}")
+            self.timer_var.set(
+                f"proxima corrida en {restantes // 60:02d}:{restantes % 60:02d}"
+            )
         self.raiz.after(200, self._vaciar_cola)
 
+    def _mostrar_marcador(self) -> None:
+        """Texto de bienvenida mientras no haya ninguna linea de log."""
+        self._marcador = True
+        self.texto.configure(state="normal")
+        self.texto.delete("1.0", "end")
+        self.texto.insert(
+            "1.0",
+            "Sin actividad todavia. Pulse «Sincronizar» para enviar el catalogo "
+            "a las balanzas activas.\n",
+            "DEBUG",
+        )
+        self.texto.configure(state="disabled")
+
     def _escribir(self, linea: str, nivel: str) -> None:
-        self.texto.configure(state=tk.NORMAL)
-        self.texto.insert(tk.END, linea + "\n", nivel)
-        self.texto.see(tk.END)
-        self.texto.configure(state=tk.DISABLED)
+        self.texto.configure(state="normal")
+        if self._marcador:
+            # La primera linea real sustituye al texto de bienvenida en vez de
+            # empujarlo hacia abajo, donde se quedaria para siempre.
+            self.texto.delete("1.0", "end")
+            self._marcador = False
+        self.texto.insert("end", linea + "\n", nivel)
+        self.texto.see("end")
+        self.texto.configure(state="disabled")
 
     def _pintar_estado(self, balanza_id: int, estado: str, detalle: str) -> None:
-        fila = self.filas.get(balanza_id)
-        if not fila:
+        datos = self.filas.get(balanza_id)
+        if not datos:
             return
-        texto, color = ESTADOS.get(estado, (estado, "#d4d4d4"))
+        rotulo, color = ESTADOS.get(estado, (estado, "texto_tenue"))
         if detalle and estado == "enviando":
-            texto = f"{texto} {detalle}"
-        fila["etiqueta"].configure(text=texto, foreground=color)
+            rotulo = f"{rotulo} · {detalle}"
+        datos["ultimo_estado"] = (rotulo, color)
+        self._repintar_estado(datos)
 
     # ------------------------------------------------------------------ #
     # Acciones
@@ -345,9 +657,12 @@ class Aplicacion:
             messagebox.showinfo("En curso", "Ya hay una operacion en marcha.")
             return False
         self.hilo = threading.Thread(target=funcion, name=nombre, daemon=True)
-        self.btn_sync.configure(state=tk.DISABLED)
-        self.btn_detener.configure(state=tk.NORMAL)
-        self.estado_var.set("Trabajando...")
+        self.btn_sync.configure(state="disabled")
+        self.btn_detener.configure(state="normal")
+        self.estado_var.set("Trabajando…")
+        self.punto_global.pintar(self.tema.acento)
+        self.progreso.grid()
+        self.progreso.start(14)
         self.hilo.start()
         return True
 
@@ -356,7 +671,7 @@ class Aplicacion:
         self._lanzar(lambda: self._trabajo_sincronizar(solo), "sincronizacion")
 
     def _sincronizar_en_hilo(self) -> None:
-        """Punto de entrada del temporizador (ya corre fuera de la interfaz)."""
+        """Entrada del temporizador; ya corre fuera del hilo de la interfaz."""
         if self._ocupado():
             log.warning("El temporizador se salta esta corrida: hay otra en marcha")
             return
@@ -368,22 +683,35 @@ class Aplicacion:
 
     def _detener(self) -> None:
         self.motor.cancelar()
-        self.estado_var.set("Cancelando; se termina la balanza en curso...")
+        self.estado_var.set("Cancelando; se termina la balanza en curso…")
 
     def _al_terminar(self, resultado: ResultadoSincronizacion) -> None:
-        self.btn_sync.configure(state=tk.NORMAL)
-        self.btn_detener.configure(state=tk.DISABLED)
-        self.estado_var.set(
-            f"Ultima corrida {resultado.fin:%H:%M:%S}: {resultado.exitosas} correctas, "
-            f"{resultado.fallidas} con error, {resultado.omitidas} omitidas"
-        )
+        self.btn_sync.configure(state="normal")
+        self.btn_detener.configure(state="disabled")
+        self.progreso.stop()
+        self.progreso.grid_remove()
+
+        if resultado.plus_leidos or resultado.balanzas:
+            self.met_ultima.actualizar(f"{resultado.fin:%H:%M}")
+            self.met_productos.actualizar(str(resultado.plus_leidos))
+            self.estado_var.set(
+                f"{resultado.exitosas} correctas · {resultado.fallidas} con error · "
+                f"{resultado.omitidas} omitidas"
+            )
+        else:
+            self.estado_var.set("Listo")
+        self._refrescar_metricas()
+
         if resultado.error_global:
+            self.punto_global.pintar(self.tema.error)
             messagebox.showerror("La sincronizacion no pudo completarse",
                                  resultado.error_global)
         elif resultado.fallidas:
-            messagebox.showwarning(
-                "Sincronizacion con incidencias", resumen_texto(resultado)
-            )
+            self.punto_global.pintar(self.tema.aviso)
+            messagebox.showwarning("Sincronizacion con incidencias",
+                                   resumen_texto(resultado))
+        else:
+            self.punto_global.pintar(self.tema.exito)
 
     def _probar(self, balanza_id: int) -> None:
         self._aplicar_balanzas()
@@ -392,9 +720,10 @@ class Aplicacion:
             return
 
         def trabajo() -> None:
+            self.cola.put(("estado", (balanza_id, "verificando", "")))
             ok, motivo = self.motor.probar_balanza(balanza)
-            self.cola.put(("estado", (balanza_id, "ok" if ok else "error", motivo)))
-            log.info("[%s] prueba: %s", balanza.nombre, motivo)
+            self.cola.put(("estado", (balanza_id, "ok" if ok else "error", "")))
+            log.info("[%s] %s", balanza.nombre, motivo)
             self.cola.put(("fin", self._resultado_vacio()))
 
         self._lanzar(trabajo, f"probar-{balanza_id}")
@@ -404,9 +733,10 @@ class Aplicacion:
 
         def trabajo() -> None:
             for balanza in self.config.balanzas_activas():
+                self.cola.put(("estado", (balanza.id, "verificando", "")))
                 ok, motivo = self.motor.probar_balanza(balanza)
-                self.cola.put(("estado", (balanza.id, "ok" if ok else "error", motivo)))
-                log.info("[%s] prueba: %s", balanza.nombre, motivo)
+                self.cola.put(("estado", (balanza.id, "ok" if ok else "error", "")))
+                log.info("[%s] %s", balanza.nombre, motivo)
             self.cola.put(("fin", self._resultado_vacio()))
 
         self._lanzar(trabajo, "probar-todas")
@@ -417,7 +747,7 @@ class Aplicacion:
         if balanza is None:
             return
         if not messagebox.askyesno(
-            "Forzar limpieza",
+            "Vaciar la balanza",
             f"Se borrara TODO el catalogo de {balanza.nombre} ({balanza.ip}).\n\n"
             "Uselo cuando la balanza quedo con datos corruptos. Despues habra que "
             "sincronizar de nuevo.\n\n¿Continuar?",
@@ -426,9 +756,7 @@ class Aplicacion:
 
         def trabajo() -> None:
             resultado = self.motor.limpiar_balanza(balanza)
-            self.cola.put(
-                ("estado", (balanza_id, "ok" if resultado.ok else "error", resultado.mensaje))
-            )
+            self.cola.put(("estado", (balanza_id, "ok" if resultado.ok else "error", "")))
             self.cola.put(("fin", self._resultado_vacio()))
 
         self._lanzar(trabajo, f"limpiar-{balanza_id}")
@@ -436,41 +764,101 @@ class Aplicacion:
     def _alternar_temporizador(self) -> None:
         if self.temporizador.activo:
             self.temporizador.detener()
-            self.btn_timer.configure(text="Iniciar automatico")
+            self.btn_timer.configure(text="Automatico")
             self.timer_var.set("")
-        else:
-            self._guardar_config(silencioso=True)
-            self.temporizador.intervalo_minutos = self.config.sincronizacion.intervalo_minutos
-            self.temporizador.iniciar(ejecutar_ahora=False)
-            self.btn_timer.configure(text="Detener automatico")
+            return
+        self._guardar_config(silencioso=True)
+        self.temporizador.intervalo_minutos = self.config.sincronizacion.intervalo_minutos
+        self.temporizador.iniciar(ejecutar_ahora=False)
+        self.btn_timer.configure(text="Detener automatico")
+
+    def _analizar_origen(self) -> None:
+        self.config.origen.ruta = self.var_ruta.get().strip() or self.config.origen.ruta
+        try:
+            lectura = leer(self.config.origen, str(self.config.resolver(self.config.origen.ruta)))
+        except OrigenError as exc:
+            self.lbl_origen.configure(text=str(exc), style="Error.TLabel")
+            self.insignia_previa.actualizar("error", self.tema.error)
+            return
+
+        self.lbl_origen.configure(
+            text=f"{lectura.total} productos validos de {lectura.lineas_totales} lineas · "
+                 f"{len(lectura.incidencias)} incidencias",
+            style="TenueSup.TLabel",
+        )
+        self.insignia_previa.actualizar(f"{lectura.total} productos", self.tema.texto_tenue)
+        self.met_productos.actualizar(str(lectura.total))
+
+        lineas = [f"{'CODIGO':<8}{'DESCRIPCION':<26}{'PRECIO':>10}   VIDA UTIL"]
+        for plu in lectura.plus[:200]:
+            lineas.append(
+                f"{plu.codigo:<8}{plu.nombre[:24]:<26}{plu.precio_formateado():>10}"
+                f"   {plu.vida_util_dias:>3} d"
+            )
+        if lectura.incidencias:
+            lineas.append("")
+            lineas.append("INCIDENCIAS")
+            lineas.extend(f"  {i}" for i in lectura.incidencias[:20])
+
+        self.tabla.configure(state="normal")
+        self.tabla.delete("1.0", "end")
+        self.tabla.insert("1.0", "\n".join(lineas))
+        self.tabla.tag_add("cabecera", "1.0", "1.end")
+        if lectura.incidencias:
+            inicio = len(lectura.plus[:200]) + 3
+            self.tabla.tag_add("incidencia", f"{inicio}.0", "end")
+        self.tabla.configure(state="disabled")
 
     # ------------------------------------------------------------------ #
     # Persistencia
     # ------------------------------------------------------------------ #
 
+    def _volcar_config_a_ui(self) -> None:
+        self.var_ruta.set(self.config.origen.ruta)
+        self.var_dll.set(self.config.rongta.dll_path)
+        sinc = self.config.sincronizacion
+        self.var_intervalo.set(str(sinc.intervalo_minutos))
+        self.var_ping.set(str(sinc.timeout_ping_seg))
+        self.var_reintentos.set(str(sinc.reintentos))
+        self.var_lote.set(str(self.config.rongta.tamano_lote_plu))
+        self.var_omitir.set(sinc.omitir_si_sin_cambios)
+        self.var_legacy.set(sinc.cerrar_procesos_legacy)
+        self.var_limpiar.set(self.config.rongta.limpiar_antes_de_enviar)
+        self.lbl_config.configure(text=_ruta_corta(self.ruta_config))
+        self.lbl_backend.configure(text=self.motor.backend.descripcion)
+        self._refrescar_metricas()
+
+    def _refrescar_metricas(self) -> None:
+        activas = sum(1 for d in self.filas.values() if d["activa"].get() and d["ip"].get().strip())
+        al_dia = sum(
+            1 for d in self.filas.values() if d.get("ultimo_estado", ("", ""))[1] == "exito"
+        )
+        self.met_balanzas.actualizar(str(activas))
+        self.met_ok.actualizar(str(al_dia))
+
     def _aplicar_balanzas(self) -> None:
         for balanza in self.config.balanzas:
-            fila = self.filas.get(balanza.id)
-            if not fila:
+            datos = self.filas.get(balanza.id)
+            if not datos:
                 continue
-            balanza.activa = bool(fila["activa"].get())
-            balanza.ip = fila["ip"].get().strip()
-            texto = fila["puerto"].get().strip()
+            balanza.activa = bool(datos["activa"].get())
+            balanza.ip = datos["ip"].get().strip()
+            texto = datos["puerto"].get().strip()
             if texto.isdigit() and 0 < int(texto) < 65536:
                 balanza.puerto = int(texto)
-
-    def _guardar_balanzas(self) -> None:
-        self._aplicar_balanzas()
-        self._persistir()
+        self._refrescar_metricas()
 
     @staticmethod
     def _entero(var: tk.StringVar, actual: int) -> int:
         texto = var.get().strip()
         return int(texto) if texto.lstrip("-").isdigit() else actual
 
+    def _guardar_balanzas(self) -> None:
+        self._aplicar_balanzas()
+        self._persistir()
+
     def _guardar_config(self, silencioso: bool = False) -> None:
-        origen = self.config.origen
-        origen.ruta = self.var_ruta.get().strip() or origen.ruta
+        self.config.origen.ruta = self.var_ruta.get().strip() or self.config.origen.ruta
         self.config.rongta.dll_path = self.var_dll.get().strip() or self.config.rongta.dll_path
         sinc = self.config.sincronizacion
         sinc.intervalo_minutos = max(1, self._entero(self.var_intervalo, sinc.intervalo_minutos))
@@ -478,6 +866,7 @@ class Aplicacion:
         sinc.reintentos = max(0, self._entero(self.var_reintentos, sinc.reintentos))
         sinc.omitir_si_sin_cambios = bool(self.var_omitir.get())
         sinc.cerrar_procesos_legacy = bool(self.var_legacy.get())
+        self.config.rongta.limpiar_antes_de_enviar = bool(self.var_limpiar.get())
         self.config.rongta.tamano_lote_plu = max(
             0, self._entero(self.var_lote, self.config.rongta.tamano_lote_plu)
         )
@@ -495,8 +884,9 @@ class Aplicacion:
             messagebox.showerror("No se pudo guardar", str(exc))
             return
         log.info("Configuracion guardada en %s", destino)
+        self.estado_var.set(f"Configuracion guardada · {datetime.now():%H:%M:%S}")
         if not silencioso:
-            messagebox.showinfo("Guardado", f"Configuracion guardada en {destino}")
+            self.punto_global.pintar(self.tema.exito)
 
     def _elegir_origen(self) -> None:
         ruta = filedialog.askopenfilename(
@@ -514,14 +904,10 @@ class Aplicacion:
             self.var_dll.set(ruta)
 
     def _limpiar_log(self) -> None:
-        self.texto.configure(state=tk.NORMAL)
-        self.texto.delete("1.0", tk.END)
-        self.texto.configure(state=tk.DISABLED)
+        self._mostrar_marcador()
 
     @staticmethod
     def _resultado_vacio() -> ResultadoSincronizacion:
-        from datetime import datetime
-
         ahora = datetime.now()
         return ResultadoSincronizacion(inicio=ahora, fin=ahora, origen="", plus_leidos=0)
 
@@ -541,7 +927,7 @@ class Aplicacion:
         self.raiz.destroy()
 
     def ejecutar(self) -> int:
-        log.info("ibalance iniciado (%s)", self.motor.backend.descripcion)
+        log.info("ibalance iniciado · %s", self.motor.backend.descripcion)
         self.raiz.mainloop()
         return 0
 

@@ -58,13 +58,31 @@ ibalance gui                     # interfaz gráfica
 
 ## Interfaz gráfica
 
-Tres pestañas: **Actividad** (log en vivo, sincronizar, temporizador),
-**Balanzas** (IP y puerto por balanza, estado en vivo, *Probar*, *Sincronizar*
-y *Forzar limpieza* individuales) y **Configuración**.
+![Resumen](docs/img/resumen.png)
 
-La sincronización corre en un hilo aparte y todo lo que vuelve de él pasa por
-una cola que vacía el hilo de la interfaz, porque tkinter no es seguro entre
-hilos.
+Cuatro vistas en una barra lateral:
+
+| Vista | Qué hace |
+|---|---|
+| **Resumen** | métricas de la corrida y registro de actividad en vivo |
+| **Balanzas** | una tarjeta por balanza: estado en vivo, IP y puerto, *Probar*, *Enviar* y *Vaciar* |
+| **Origen** | ruta del archivo y vista previa de los productos leídos, con sus incidencias |
+| **Ajustes** | librería, intervalos, reintentos y tamaño de lote |
+
+Cada balanza muestra su estado según avanza el envío, y la barra inferior
+resume la corrida:
+
+![Balanzas](docs/img/sincronizando.png)
+
+Hay tema claro y oscuro (botón de la esquina superior derecha):
+
+![Tema oscuro](docs/img/resumen_oscuro.png)
+
+Por dentro: la sincronización corre en un hilo aparte y todo lo que vuelve de
+él —líneas de log, cambios de estado, el resultado final— pasa por una cola que
+vacía el hilo de la interfaz, porque tkinter solo puede tocarse desde el hilo
+que creó la ventana. Los colores viven en `gui/tema.py` y las piezas visuales
+en `gui/widgets.py`, así que cambiar el aspecto no obliga a tocar la ventana.
 
 ## Configuración
 
@@ -145,7 +163,7 @@ src/ibalance/
     cli.py             línea de comandos
     sources/           lectores (ancho fijo, CSV)
     rongta/            payload, envoltorio ctypes de la DLL, simulador
-    gui/               interfaz tkinter
+    gui/               interfaz tkinter (tema.py, widgets.py, app.py)
 tools/
     build_exe.ps1      compilación con PyInstaller de 32 bits
     inspect_dll.py     inspección de la DLL sin cargarla
