@@ -28,7 +28,8 @@ python -c "import struct; print(struct.calcsize('P') * 8)"   # debe decir 32
 
 ```
 C:\ibalance\
-    ibalance.exe            <- esta aplicación
+    ibalance2.exe           <- esta aplicación (doble clic)
+    ibalance2-consola.exe   <- la misma, para diagnóstico y tareas programadas
     config.json
     rtslabelscale.dll       <- del fabricante (NO empaquetar dentro del .exe)
     RLS1000\                <- dependencias del fabricante
@@ -46,14 +47,42 @@ encuentra.
 
 ## 3. Instalación
 
+### Opción A — el ejecutable ya compilado (recomendada)
+
+Nada de Python en el equipo de la tienda.
+
+1. Descargue `ibalance2-windows-x86.zip` de la pestaña **Releases** del
+   repositorio. Lo compila el flujo de integración continua con un Python x86,
+   así que la arquitectura está garantizada.
+2. Descomprímalo en `C:\ibalance`.
+3. Doble clic en **`ibalance2.exe`**.
+
+La primera vez crea su `config.json`, busca la DLL en `C:\ibalance`,
+`C:\ibalance\RLS1000` y junto al propio ejecutable, y muestra en pantalla lo
+que falte. No hay que editar nada a mano.
+
+Para dejarlo instalado del todo (carpeta fija, acceso directo y tarea
+programada):
+
 ```powershell
-# Desde el código
+.\instalar.ps1 -CrearTarea -Intervalo 60
+```
+
+`instalar.ps1` es idempotente y **no pisa un `config.json` existente**, así que
+sirve también para actualizar: descomprima la versión nueva y vuelva a
+ejecutarlo.
+
+### Opción B — desde el código
+
+```powershell
 py -3.12-32 -m pip install -e .
 ibalance init --config C:\ibalance\config.json
-notepad C:\ibalance\config.json
 ibalance -c C:\ibalance\config.json check
+```
 
-# O compilar el ejecutable
+### Opción C — compilar el ejecutable localmente
+
+```powershell
 .\tools\build_exe.ps1 -Python "C:\Python312-32\python.exe"
 ```
 
@@ -79,14 +108,16 @@ Dos opciones:
 intervalo de `sincronizacion.intervalo_minutos`.
 
 **Programador de tareas de Windows** (recomendado si el equipo no tiene sesión
-abierta): tarea que ejecute
+abierta). Lo crea `instalar.ps1 -CrearTarea`, o a mano con esta acción:
 
 ```
-C:\ibalance\ibalance.exe -c C:\ibalance\config.json sync -q
+C:\ibalance\ibalance2-consola.exe -c C:\ibalance\config.json sync -q
 ```
 
-Devuelve `0` si todas las balanzas quedaron al día y `1` si alguna falló, así
-que el Programador puede reintentar. `-q` evita la consola.
+Use el ejecutable **de consola**: el de ventana abriría la interfaz en cada
+disparo. Devuelve `0` si todas las balanzas quedaron al día y `1` si alguna
+falló, así que el Programador puede reintentar. `-q` evita el texto en
+pantalla.
 
 ## 6. El puerto 4000 y la aplicación antigua
 
@@ -113,9 +144,10 @@ Está **desactivado por defecto**: cerrar procesos ajenos es intrusivo y solo
 debe hacerse si el operador lo decide. `ibalance check` avisa cuando detecta la
 aplicación antigua en memoria, aunque la opción esté apagada.
 
-Ojo con el nombre: si compila esta aplicación también como `ibalance.exe`, se
-cerraría a sí misma. Use otro nombre, o ponga en la lista el nombre real del
-ejecutable antiguo.
+El ejecutable de esta aplicación se llama `ibalance2.exe` justamente para no
+confundirse con el antiguo. Además, `procesos_activos` descarta siempre el
+nombre del ejecutable en curso, de modo que la opción no puede cerrar la
+propia aplicación aunque alguien la renombre.
 
 ## 7. Cuando una balanza queda con datos corruptos
 

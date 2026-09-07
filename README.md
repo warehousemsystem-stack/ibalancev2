@@ -22,8 +22,10 @@ contra balanzas físicas**, que solo puede hacerse en la tienda con Python de
 
 ## Requisitos
 
-- **Windows** y **Python 3.10 o superior de 32 bits** (la DLL es de 32 bits;
-  ver [`docs/DESPLIEGUE_WINDOWS.md`](docs/DESPLIEGUE_WINDOWS.md)).
+- **Windows.** Si usa el `.exe` de Releases, nada más: lleva Python dentro.
+  Para trabajar desde el código hace falta **Python 3.10 o superior de 32
+  bits**, porque la DLL es de 32 bits (ver
+  [`docs/DESPLIEGUE_WINDOWS.md`](docs/DESPLIEGUE_WINDOWS.md)).
 - `rtslabelscale.dll` y su carpeta `RLS1000\`, tal como los entrega el
   fabricante.
 - Sin dependencias de terceros: solo biblioteca estándar, lo que simplifica el
@@ -32,7 +34,38 @@ contra balanzas físicas**, que solo puede hacerse en la tienda con Python de
 Para desarrollar y probar el parseo y los payloads sirve cualquier sistema
 operativo, gracias al backend simulado.
 
-## Instalación rápida
+## Instalación en la tienda
+
+Descargue `ibalance2-windows-x86.zip` de la pestaña
+[Releases](../../releases), descomprímalo en `C:\ibalance` y haga **doble clic
+en `ibalance2.exe`**. No hay que instalar Python ni editar archivos.
+
+La primera vez, la aplicación crea su `config.json`, busca sola la
+`rtslabelscale.dll` y muestra en pantalla lo que falta:
+
+![Puesta en marcha](docs/img/primer_arranque.png)
+
+Resuelva los tres puntos y la lista desaparece. Detalle en
+[`tools/LEEME.txt`](tools/LEEME.txt).
+
+El zip trae dos ejecutables:
+
+| Archivo | Para qué |
+|---|---|
+| `ibalance2.exe` | la aplicación con ventana; es la del doble clic |
+| `ibalance2-consola.exe` | la misma, en consola: diagnóstico y tareas programadas |
+
+Son dos porque un ejecutable de ventana no tiene salida de texto: `check` y
+`sync` no podrían mostrar nada.
+
+Opcionalmente, `instalar.ps1` deja la carpeta en su sitio, crea el acceso
+directo y programa la sincronización automática:
+
+```powershell
+.\instalar.ps1 -CrearTarea -Intervalo 60
+```
+
+## Instalación desde el código
 
 ```bash
 pip install -e .
@@ -40,7 +73,7 @@ ibalance init                    # crea config.json
 ibalance check                   # valida config, origen, DLL y red
 ibalance sync --simular          # ensayo sin tocar las balanzas
 ibalance sync                    # envío real
-ibalance gui                     # interfaz gráfica
+ibalance                         # sin argumentos abre la ventana
 ```
 
 ## Comandos
@@ -165,6 +198,9 @@ src/ibalance/
     rongta/            payload, envoltorio ctypes de la DLL, simulador
     gui/               interfaz tkinter (tema.py, widgets.py, app.py)
 tools/
-    build_exe.ps1      compilación con PyInstaller de 32 bits
+    entrada.py         punto de entrada de PyInstaller
+    build_exe.ps1      compilación local con PyInstaller de 32 bits
+    instalar.ps1       instalador para el equipo de la tienda
     inspect_dll.py     inspección de la DLL sin cargarla
+    LEEME.txt          guía que acompaña al ejecutable
 ```

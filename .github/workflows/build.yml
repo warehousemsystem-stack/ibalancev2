@@ -1,0 +1,93 @@
+name: Compilar ejecutable
+
+# rtslabelscale.dll es de 32 bits y Windows no puede cargarla en un proceso de
+# 64 bits, asi que el .exe se compila con un Python x86. Ese es el motivo de que
+# la compilacion viva aqui y no en el equipo de nadie: es facil equivocarse de
+# arquitectura sin darse cuenta hasta que falla en la tienda.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:        # permite lanzarlo a mano desde la pestaña Actions
+
+permissions:
+  contents: write           # necesario para publicar la release
+
+jobs:
+  windows-x86:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: "x86"
+
+      - name: Comprobar que el interprete es de 32 bits
+        shell: pwsh
+        run: |
+          $bits = python -c "import struct; print(struct.calcsize('P') * 8)"
+          if ($bits.Trim() -ne "32") {
+            throw "El interprete es de $bits bits; la DLL exige 32."
+          }
+          Write-Host "Python de 32 bits confirmado."
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,build]"
+
+      - name: Pruebas
+        run: pytest -q
+
+      - name: Compilar
+        shell: pwsh
+        run: |
+          # Dos ejecutables a proposito: el de ventana no tiene consola y no
+          # podria mostrar la salida de 'check' ni de 'sync'; el de consola
+          # sirve para diagnostico y para el Programador de tareas.
+          python -m PyInstaller --noconfirm --clean --onefile --windowed `
+            --name ibalance2 --paths src --collect-submodules ibalance `
+            tools/entrada.py
+          python -m PyInstaller --noconfirm --clean --onefile --console `
+            --name ibalance2-consola --paths src --collect-submodules ibalance `
+            tools/entrada.py
+
+      - name: Comprobar que el ejecutable arranca
+        shell: pwsh
+        run: |
+          $salida = & .\dist\ibalance2-consola.exe --version
+          Write-Host $salida
+          if (-not $salida) { throw "El ejecutable no respondio a --version" }
+
+      - name: Preparar el paquete
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path paquete\docs | Out-Null
+          Copy-Item dist\ibalance2.exe          paquete\
+          Copy-Item dist\ibalance2-consola.exe  paquete\
+          Copy-Item config.example.json         paquete\config.json
+          Copy-Item tools\LEEME.txt             paquete\
+          Copy-Item tools\instalar.ps1          paquete\
+          Copy-Item docs\*.md                   paquete\docs\
+          Compress-Archive -Path paquete\* -DestinationPath ibalance2-windows-x86.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ibalance2-windows-x86
+          path: ibalance2-windows-x86.zip
+          retention-days: 90
+
+      - name: Publicar la release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ibalance2-windows-x86.zip
+          body: |
+            Descargue `ibalance2-windows-x86.zip`, descomprimalo en `C:\ibalance`
+            y ejecute `ibalance2.exe`.
+
+            La libreria `rtslabelscale.dll` del fabricante NO va incluida: debe
+            estar ya en el equipo, con su carpeta `RLS1000`. La aplicacion la
+            busca sola al arrancar.

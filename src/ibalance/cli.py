@@ -281,9 +281,29 @@ def cmd_gui(args: argparse.Namespace) -> int:
     try:
         from .gui.app import ejecutar
     except ImportError as exc:  # tkinter ausente en algunas instalaciones minimas
-        print(f"No se pudo abrir la interfaz grafica: {exc}", file=sys.stderr)
+        _avisar_sin_consola(
+            "No se pudo abrir la interfaz grafica",
+            f"{exc}\n\nInstale Python con soporte de tkinter o use los "
+            "subcomandos de consola.",
+        )
         return ERROR
     return ejecutar(Path(args.config) if args.config else None, simular=args.simular)
+
+
+def _avisar_sin_consola(titulo: str, mensaje: str) -> None:
+    """Muestra un error tambien cuando el .exe se compilo sin consola.
+
+    Un ejecutable de ventana no tiene stdout: si algo falla al arrancar, sin
+    esto el programa se cerraria sin decir nada.
+    """
+    print(f"ERROR: {titulo}: {mensaje}", file=sys.stderr)
+    if getattr(sys, "frozen", False):
+        try:
+            from tkinter import messagebox
+
+            messagebox.showerror(titulo, mensaje)
+        except Exception:  # noqa: BLE001 - ya estamos informando de un fallo
+            pass
 
 
 # --------------------------------------------------------------------------- #
@@ -363,6 +383,14 @@ def construir_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+    # Sin argumentos se abre la ventana: el caso normal es que alguien haga
+    # doble clic en el ejecutable, y ahi un mensaje de uso de argparse no
+    # ayuda a nadie. Los subcomandos y --help siguen funcionando igual.
+    if not argv:
+        argv = ["gui"]
+
     parser = construir_parser()
     args = parser.parse_args(argv)
     try:

@@ -1,0 +1,86 @@
+ibalance 2 - sincronizacion de balanzas Rongta RLS-1000/1100
+===========================================================
+
+QUE HAY EN ESTA CARPETA
+
+  ibalance2.exe           La aplicacion. Doble clic y se abre.
+  ibalance2-consola.exe   La misma aplicacion en modo consola, para
+                          diagnostico y para el Programador de tareas.
+  config.json             Configuracion. Se puede editar desde la ventana.
+  instalar.ps1            Instalador opcional (ver mas abajo).
+  docs\                   Documentacion detallada.
+
+
+PUESTA EN MARCHA (2 minutos)
+
+  1. Copie esta carpeta a  C:\ibalance
+     Ahi es donde suele estar ya la libreria del fabricante
+     (rtslabelscale.dll y la carpeta RLS1000). Si esta en otro sitio no
+     pasa nada: la aplicacion le dejara indicarlo.
+
+  2. Doble clic en ibalance2.exe
+
+  3. La pantalla "Puesta en marcha" le dira que falta. Son tres cosas:
+
+       - Archivo de productos ... el cadtxt.txt que exporta el sistema
+       - Libreria rtslabelscale.dll ... normalmente se detecta sola
+       - Balanzas activas con IP ... marque "Activa" y escriba la IP
+
+  4. Pulse "Sincronizar".
+
+  La lista desaparece cuando las tres estan resueltas. No hay que editar
+  ningun archivo a mano.
+
+
+ANTES DE LA PRIMERA SINCRONIZACION REAL
+
+  Conviene un ensayo que no toca ninguna balanza. Abra PowerShell en esta
+  carpeta y ejecute:
+
+      .\ibalance2-consola.exe check
+      .\ibalance2-consola.exe sync --simular
+
+  "check" valida la configuracion, comprueba la arquitectura de la DLL y
+  hace ping a cada balanza. "sync --simular" genera los datos exactos que
+  recibirian las balanzas y los deja en logs\simulacion\, sin enviarlos.
+
+  Despues, pruebe con UNA balanza antes que con todas:
+
+      .\ibalance2-consola.exe sync -b 1
+
+
+SINCRONIZACION AUTOMATICA
+
+  Desde la ventana: boton "Automatico" (usa el intervalo de Ajustes).
+
+  Como tarea de Windows, que funciona sin la ventana abierta:
+
+      .\instalar.ps1 -CrearTarea -Intervalo 60
+
+  O a mano, en el Programador de tareas, con esta accion:
+
+      C:\ibalance\ibalance2-consola.exe -c C:\ibalance\config.json sync -q
+
+
+SI ALGO VA MAL
+
+  Todo queda registrado en  logs\ibalance.log  y cada corrida deja un
+  detalle por balanza en  logs\reportes\
+
+  Errores mas frecuentes:
+
+  "[WinError 193] no es una aplicacion Win32 valida"
+      La DLL es de 32 bits y algo se ejecuto en 64. Use el ibalance2.exe
+      de este paquete, que ya viene compilado en 32 bits.
+
+  Todas las balanzas rechazan la conexion
+      La aplicacion antigua (ibalance.exe, la de C#) quedo abierta en
+      segundo plano y retiene la unica conexion que admite la balanza.
+      Cierrela con:   taskkill /F /IM ibalance.exe
+      O active la casilla correspondiente en Ajustes.
+
+  Una balanza quedo con datos corruptos
+      En la vista Balanzas, boton "Vaciar" de esa balanza. Borra su
+      catalogo; despues vuelva a sincronizar.
+
+  Mas detalle en  docs\DESPLIEGUE_WINDOWS.md

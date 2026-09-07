@@ -25,9 +25,27 @@ def _sin_ventana() -> dict[str, object]:
     return {}
 
 
+def _nombre_propio() -> str:
+    """Nombre del ejecutable actual, en minusculas."""
+    import sys
+
+    if getattr(sys, "frozen", False):
+        return os.path.basename(sys.executable).lower()
+    return ""
+
+
 def procesos_activos(nombres: list[str] | tuple[str, ...] = PROCESOS_LEGACY) -> list[str]:
-    """Devuelve cuales de esos procesos estan corriendo ahora mismo."""
+    """Devuelve cuales de esos procesos estan corriendo ahora mismo.
+
+    Nunca incluye el propio ejecutable: si alguien nombra este programa igual
+    que el antiguo, la lista de procesos a cerrar lo mataria a mitad de una
+    sincronizacion.
+    """
     if os.name != "nt" or not nombres:
+        return []
+    propio = _nombre_propio()
+    nombres = [n for n in nombres if n.lower() != propio]
+    if not nombres:
         return []
     try:
         salida = subprocess.run(  # noqa: S603 - comando fijo del sistema

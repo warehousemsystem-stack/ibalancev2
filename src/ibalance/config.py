@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from contextlib import suppress
 from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Any
@@ -413,6 +414,57 @@ def config_por_defecto(balanzas: int = 12) -> Config:
     cfg = Config()
     cfg.balanzas = [Balanza(id=i) for i in range(1, balanzas + 1)]
     return cfg
+
+
+#: Sitios donde suele acabar la DLL del fabricante, por orden de preferencia.
+#: El directorio propio va antes que RLS1000 a proposito: son dos archivos
+#: distintos con el mismo nombre y el de RLS1000 exporta menos funciones.
+CANDIDATOS_DLL = (
+    r"C:\ibalance\rtslabelscale.dll",
+    r"C:\ibalance\RLS1000\rtslabelscale.dll",
+    r"C:\Program Files (x86)\ibalance\rtslabelscale.dll",
+)
+
+
+def autodetectar_dll(dir_base: Path | None = None) -> str:
+    """Busca ``rtslabelscale.dll`` sin obligar al operador a localizarla.
+
+    Mira primero junto al ejecutable, que es donde queda si se instalo todo en
+    la misma carpeta, y despues en las rutas habituales del fabricante.
+    """
+    candidatos: list[Path] = []
+    if dir_base is not None:
+        candidatos += [dir_base / "rtslabelscale.dll",
+                       dir_base / "RLS1000" / "rtslabelscale.dll"]
+    candidatos += [Path(c) for c in CANDIDATOS_DLL]
+    for ruta in candidatos:
+        try:
+            if ruta.is_file():
+                return str(ruta)
+        except OSError:
+            continue
+    return ""
+
+
+def preparar_primer_arranque(ruta: Path) -> tuple[Config, bool]:
+    """Devuelve la configuracion y si acaba de crearse.
+
+    La primera vez que se ejecuta la aplicacion no hay ``config.json``: en vez
+    de fallar, se escribe uno con valores por defecto y la DLL ya localizada,
+    para que el operador solo tenga que indicar el archivo de productos y las
+    IP de sus balanzas.
+    """
+    if ruta.is_file():
+        return Config.cargar(ruta), False
+
+    cfg = config_por_defecto()
+    cfg.ruta_archivo = ruta
+    detectada = autodetectar_dll(ruta.parent)
+    if detectada:
+        cfg.rongta.dll_path = detectada
+    with suppress(OSError):
+        cfg.guardar(ruta)
+    return cfg, True
 
 
 def ruta_config_por_defecto(dir_base: Path | None = None) -> Path:

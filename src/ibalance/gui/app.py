@@ -28,7 +28,14 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Any
 
-from ..config import Balanza, Config, ConfigError, config_por_defecto, ruta_config_por_defecto
+from ..config import (
+    Balanza,
+    Config,
+    ConfigError,
+    config_por_defecto,
+    preparar_primer_arranque,
+    ruta_config_por_defecto,
+)
 from ..engine import MotorSincronizacion, crear_backend
 from ..logging_setup import ManejadorCallback, configurar, obtener
 from ..models import ResultadoSincronizacion
@@ -117,8 +124,11 @@ class Aplicacion:
     # ------------------------------------------------------------------ #
 
     def _cargar_config(self) -> Config:
+        self.primer_arranque = False
         try:
-            return Config.cargar(self.ruta_config)
+            config, nuevo = preparar_primer_arranque(self.ruta_config)
+            self.primer_arranque = nuevo
+            return config
         except ConfigError as exc:
             if self.ruta_config.exists():
                 messagebox.showerror(
@@ -249,10 +259,13 @@ class Aplicacion:
     def _vista_resumen(self) -> ttk.Frame:
         vista = ttk.Frame(self.contenido, padding=(20, 18))
         vista.columnconfigure(0, weight=1)
-        vista.rowconfigure(2, weight=1)
+        vista.rowconfigure(3, weight=1)
+
+        self.tarjeta_inicio = self._tarjeta_puesta_en_marcha(vista)
+        self.tarjeta_inicio.grid(row=0, column=0, sticky="ew", pady=(0, 14))
 
         tarjeta = Tarjeta(vista, self.tema, relleno=18)
-        tarjeta.grid(row=0, column=0, sticky="ew")
+        tarjeta.grid(row=1, column=0, sticky="ew")
         self._repintables.append(tarjeta)
         for i in range(4):
             tarjeta.columnconfigure(i, weight=1, uniform="metricas")
@@ -268,11 +281,11 @@ class Aplicacion:
 
         self.progreso = ttk.Progressbar(vista, style="Fina.Horizontal.TProgressbar",
                                         mode="indeterminate")
-        self.progreso.grid(row=1, column=0, sticky="ew", pady=(14, 0))
+        self.progreso.grid(row=2, column=0, sticky="ew", pady=(14, 0))
         self.progreso.grid_remove()
 
         registro = Tarjeta(vista, self.tema, relleno=0)
-        registro.grid(row=2, column=0, sticky="nsew", pady=(14, 0))
+        registro.grid(row=3, column=0, sticky="nsew", pady=(14, 0))
         registro.columnconfigure(0, weight=1)
         registro.rowconfigure(1, weight=1)
         self._repintables.append(registro)
@@ -307,6 +320,95 @@ class Aplicacion:
         self._mostrar_marcador()
 
         return vista
+
+    def _tarjeta_puesta_en_marcha(self, padre: ttk.Frame) -> Tarjeta:
+        """Lista de lo que falta para poder sincronizar.
+
+        Con el ejecutable recien copiado no hay nada configurado, y la
+        alternativa —dejar que el operador descubra por su cuenta que falta la
+        DLL cuando ya pulso «Sincronizar»— es justo lo que hace que una
+        instalacion se atasque. La tarjeta se esconde sola en cuanto los tres
+        requisitos estan cubiertos.
+        """
+        tarjeta = Tarjeta(padre, self.tema, relleno=18)
+        tarjeta.columnconfigure(1, weight=1)
+        self._repintables.append(tarjeta)
+
+        ttk.Label(tarjeta, text="Puesta en marcha", style="SeccionSup.TLabel").grid(
+            row=0, column=0, columnspan=3, sticky="w"
+        )
+        ttk.Label(
+            tarjeta,
+            text="Faltan datos para poder sincronizar. Resuelvalos una vez y "
+                 "quedan guardados.",
+            style="TenueSup.TLabel",
+        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(4, 12))
+
+        self.requisitos: dict[str, dict[str, Any]] = {}
+        filas = (
+            ("origen", "Archivo de productos", "Elegir", self._resolver_origen),
+            ("dll", "Libreria rtslabelscale.dll", "Buscar", self._resolver_dll),
+            ("balanzas", "Balanzas activas con IP", "Configurar",
+             lambda: self._mostrar("balanzas")),
+        )
+        for i, (clave, titulo, accion, comando) in enumerate(filas, start=2):
+            punto = Punto(tarjeta, self.tema, 8)
+            punto.grid(row=i, column=0, padx=(0, 10), pady=3)
+            self._repintables.append(punto)
+
+            etiqueta = ttk.Label(tarjeta, text=titulo, style="Sup.TLabel")
+            etiqueta.grid(row=i, column=1, sticky="w", pady=3)
+
+            boton = ttk.Button(tarjeta, text=accion, style="Sutil.TButton",
+                               width=11, command=comando)
+            boton.grid(row=i, column=2, sticky="e", pady=3)
+
+            self.requisitos[clave] = {"punto": punto, "etiqueta": etiqueta,
+                                      "boton": boton, "titulo": titulo,
+                                      "accion": accion}
+        return tarjeta
+
+    def _revisar_requisitos(self) -> bool:
+        """Actualiza la tarjeta de puesta en marcha. Devuelve si falta algo."""
+        origen = self.config.resolver(self.var_ruta.get().strip() or self.config.origen.ruta)
+        dll = self.config.resolver(self.var_dll.get().strip() or self.config.rongta.dll_path)
+        activas = [
+            d for d in self.filas.values() if d["activa"].get() and d["ip"].get().strip()
+        ]
+
+        estado = {
+            "origen": (origen.is_file(), str(origen) if origen.is_file() else "sin localizar"),
+            "dll": (dll.is_file(), str(dll) if dll.is_file() else "sin localizar"),
+            "balanzas": (bool(activas), f"{len(activas)} configuradas" if activas
+                         else "ninguna activa"),
+        }
+
+        pendientes = 0
+        for clave, (correcto, detalle) in estado.items():
+            datos = self.requisitos[clave]
+            datos["punto"].pintar(self.tema.exito if correcto else self.tema.aviso)
+            datos["etiqueta"].configure(text=f"{datos['titulo']} · {detalle}")
+            datos["boton"].configure(text="Cambiar" if correcto else datos["accion"])
+            pendientes += 0 if correcto else 1
+
+        if pendientes:
+            self.tarjeta_inicio.grid()
+        else:
+            self.tarjeta_inicio.grid_remove()
+        return bool(pendientes)
+
+    def _resolver_origen(self) -> None:
+        self._mostrar("origen")
+        self._elegir_origen()
+        if self.var_ruta.get().strip():
+            self._analizar_origen()
+            self._guardar_config(silencioso=True)
+
+    def _resolver_dll(self) -> None:
+        self._mostrar("ajustes")
+        self._elegir_dll()
+        if self.var_dll.get().strip():
+            self._guardar_config(silencioso=True)
 
     # ------------------------------------------------------------------ #
     # Vista: balanzas
@@ -827,6 +929,9 @@ class Aplicacion:
         self.lbl_config.configure(text=_ruta_corta(self.ruta_config))
         self.lbl_backend.configure(text=self.motor.backend.descripcion)
         self._refrescar_metricas()
+        self._revisar_requisitos()
+        if self.primer_arranque:
+            log.info("Primer arranque: se creo %s", self.ruta_config)
 
     def _refrescar_metricas(self) -> None:
         activas = sum(1 for d in self.filas.values() if d["activa"].get() and d["ip"].get().strip())
@@ -835,6 +940,8 @@ class Aplicacion:
         )
         self.met_balanzas.actualizar(str(activas))
         self.met_ok.actualizar(str(al_dia))
+        if hasattr(self, "requisitos"):
+            self._revisar_requisitos()
 
     def _aplicar_balanzas(self) -> None:
         for balanza in self.config.balanzas:
@@ -885,6 +992,7 @@ class Aplicacion:
             return
         log.info("Configuracion guardada en %s", destino)
         self.estado_var.set(f"Configuracion guardada · {datetime.now():%H:%M:%S}")
+        self._revisar_requisitos()
         if not silencioso:
             self.punto_global.pintar(self.tema.exito)
 
