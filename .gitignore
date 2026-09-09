@@ -2,7 +2,14 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 build/
-dist/
+*.spec
+
+# Los ejecutables compilados se versionan a proposito, para que la PC de
+# tienda pueda descargarlos sin tener que compilar nada. El resto de dist/
+# (archivos intermedios de PyInstaller) se sigue ignorando.
+dist/*
+!dist/ibalance2.exe
+!dist/ibalance2-consola.exe
 .venv/
 venv/
 .pytest_cache/

@@ -222,7 +222,7 @@ class Config:
 
     @classmethod
     def from_dict(cls, datos: dict[str, Any]) -> Config:
-        datos = migrar(datos)
+        datos = corregir_puerto_erroneo(migrar(datos))
         cfg = cls()
         cfg.version = int(datos.get("version", VERSION_CONFIG))
         cfg.origen = _construir(Origen, datos.get("origen", {}), {"layout": LayoutTxt})
@@ -417,15 +417,38 @@ def migrar(datos: dict[str, Any]) -> dict[str, Any]:
     elif tipo_viejo == "CSV":
         origen["tipo"] = "csv"
 
-    # El puerto 4000 nunca funciono: fue un valor erroneo de la version 2 de
-    # este archivo. El puerto real de las RLS-1000 es el 5001, leido del codigo
-    # de la DLL. Se corrige solo cuando vale exactamente 4000, para no pisar un
-    # puerto que el operador haya cambiado a proposito.
-    for balanza in datos.get("balanzas", []) or []:
-        if isinstance(balanza, dict) and balanza.get("puerto") == PUERTO_ERRONEO_V2:
-            balanza["puerto"] = PUERTO_RLS1000
-
     datos["version"] = VERSION_CONFIG
+    return datos
+
+
+def corregir_puerto_erroneo(datos: dict[str, Any]) -> dict[str, Any]:
+    """Sustituye el puerto 4000 por el 5001 real de las RLS-1000.
+
+    El 4000 nunca funciono: fue un valor equivocado de la version 2 de este
+    archivo, y el puerto real esta compilado dentro de rtslabelscale.dll. La
+    correccion vivia dentro de :func:`migrar`, que no se ejecuta cuando el
+    archivo ya declara la version actual; un config marcado como v3 pero con el
+    puerto viejo -- copiado entre equipos o editado a mano -- se quedaba sin
+    arreglar y el sondeo de diagnostico fallaba contra un puerto donde no
+    escucha nadie.
+
+    Solo se toca el valor exacto 4000, para no pisar un puerto que el operador
+    haya cambiado a proposito. No modifica ``datos``: a diferencia de
+    :func:`migrar`, esta funcion corre tambien sobre configuraciones al dia, y
+    el llamador puede seguir usando el diccionario que paso.
+    """
+    balanzas = datos.get("balanzas", []) or []
+    if not any(
+        isinstance(b, dict) and b.get("puerto") == PUERTO_ERRONEO_V2 for b in balanzas
+    ):
+        return datos
+    datos = dict(datos)
+    datos["balanzas"] = [
+        {**b, "puerto": PUERTO_RLS1000}
+        if isinstance(b, dict) and b.get("puerto") == PUERTO_ERRONEO_V2
+        else b
+        for b in balanzas
+    ]
     return datos
 
 

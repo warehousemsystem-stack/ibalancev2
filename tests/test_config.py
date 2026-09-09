@@ -9,6 +9,7 @@ import pytest
 
 from ibalance.config import (
     PUERTO_RLS1000,
+    VERSION_CONFIG,
     Config,
     ConfigError,
     config_por_defecto,
@@ -68,6 +69,24 @@ def test_migra_config_de_la_version_anterior() -> None:
 def test_migrar_no_toca_una_config_actual() -> None:
     actual = config_por_defecto(1).to_dict()
     assert migrar(json.loads(json.dumps(actual))) == actual
+
+
+def test_puerto_4000_se_corrige_aunque_el_config_ya_sea_v3() -> None:
+    """El puerto viejo se arregla fuera de la migracion por version.
+
+    Un config copiado entre equipos puede declarar la version actual y traer
+    igualmente el 4000, y entonces migrar() no lo tocaba.
+    """
+    datos = config_por_defecto(2).to_dict()
+    assert datos["version"] == VERSION_CONFIG
+    datos["balanzas"][0]["puerto"] = 4000
+    datos["balanzas"][1]["puerto"] = 9100  # puerto elegido a proposito
+
+    cfg = Config.from_dict(datos)
+
+    assert cfg.balanzas[0].puerto == 5001
+    assert cfg.balanzas[1].puerto == 9100
+    assert datos["balanzas"][0]["puerto"] == 4000  # no se toca la entrada
 
 
 def test_claves_desconocidas_no_rompen() -> None:
